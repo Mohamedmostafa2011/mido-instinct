@@ -12,7 +12,7 @@ export default route({
     for (const chat of Object.values(chats)) {
       const titleHit = chat.title.toLowerCase().includes(term);
       const msgs = await messagesWithIndex(chat.id);
-      const words = (m) => m.text + ' ' + (m.attachments || []).map((a) => a.name).join(' ');
+      const words = (m) => m.text + ' ' + (m.attachments || []).map((a) => a.transcript || a.name).join(' ');
       const hits = msgs.filter((m) => !m.deleted && words(m).toLowerCase().includes(term));
       if (titleHit && !hits.length) results.push({ chat: chat.id, title: chat.title, i: null, from: null, at: chat.updatedAt, snippet: chat.last?.text || '' });
       for (const m of hits.slice(-5)) {

@@ -217,7 +217,7 @@
     showSplash('Opening your chats');
     try {
       const s = await api('session');
-      S.role = s.role; S.via = s.via; S.storage = s.storage;
+      S.role = s.role; S.via = s.via; S.storage = s.storage; S.stt = !!s.stt;
       enterShell();
     } catch (e) {
       if (e.status === 401 && !IS_APP) { store.del(LS.key); showGate('That passkey didn’t work. Try again.'); return; }
@@ -247,7 +247,7 @@
     try {
       const s = await api('session');
       store.set(LS.key, key); store.set(LS.as, as);
-      S.role = s.role; S.via = s.via; S.storage = s.storage;
+      S.role = s.role; S.via = s.via; S.storage = s.storage; S.stt = !!s.stt;
       enterShell();
     } catch (e) {
       $('#gate-error').textContent = e.status === 401 ? 'That passkey didn’t work' : e.message;
@@ -671,7 +671,7 @@
       if (!m.pending && !m.deleted) {
         actions = '<span class="msg-actions">' +
           '<button type="button" class="icon-btn" data-act="reply" aria-label="Reply" title="Reply">' + icon('i-reply') + '</button>' +
-          (m.text ? '<button type="button" class="icon-btn" data-act="copy" aria-label="Copy" title="Copy">' + icon('i-copy') + '</button>' : '') +
+          (m.text || (atts && spokenOf(m)) ? '<button type="button" class="icon-btn" data-act="copy" aria-label="Copy" title="Copy">' + icon('i-copy') + '</button>' : '') +
           (mine && !(atts && atts.some((a) => a.kind === 'audio') && !m.text) ? '<button type="button" class="icon-btn" data-act="edit" aria-label="Edit" title="Edit">' + icon('i-pencil') + '</button>' : '') +
           (mine ? 
                   '<button type="button" class="icon-btn" data-act="delete" aria-label="Delete" title="Delete">' + icon('i-trash') + '</button>' : '') +
@@ -681,7 +681,7 @@
 
       let meta = '';
       if (m.pending) {
-        meta = m.state === 'failed' ? 'Not sent · <button type="button" class="retry" data-act="retry">Try again</button>' : m.state === 'uploading' ? esc(uploadText(m)) : 'Sending…';
+        meta = m.state === 'failed' ? 'Not sent · <button type="button" class="retry" data-act="retry">Try again</button>' : m.state === 'uploading' && !m.transcribing ? esc(uploadText(m)) : 'Sending…';
       } else if (groupEnd || k === lastMine) {
         meta = esc(fmtTime(m.at)) + (m.editedAt ? ' · edited' : '');
         if (k === lastMine && mine) meta += ' · ' + (seenAt >= m.at ? 'Seen' : 'Sent');
@@ -842,7 +842,13 @@
           if (it.fileId) continue;
           p.progress = { k, n: p.items.length, f: 0 };
           showUploadProgress(p);
-          it.fileId = await uploadItem(it, (f) => { p.progress.f = f; showUploadProgress(p); });
+          it.fileId = await uploadItem(it, (f) => {
+            if (f === 'stt') { p.transcribing = true; markTranscribing(p, it); return; }
+            p.progress.f = f; showUploadProgress(p);
+          });
+          p.transcribing = false;
+          const v = (p.attachments || []).find((a) => a.id === it.key);
+          if (v && v.transcribing) { v.transcribing = false; if (it.transcript) v.transcript = it.transcript; renderMessages(false); }
           media.set(it.fileId, media.get(it.key));
         }
         p.state = 'sending';
@@ -885,9 +891,11 @@
     if (a.kind === 'image') return 'Photo';
     return a.name || 'File';
   }
+  const spokenOf = (m) => (m.attachments || []).filter((a) => a.kind === 'audio' && a.transcript).map((a) => a.transcript).join(' ');
   function summaryOf(m) {
     const atts = m.attachments || [];
     if (!atts.length) return m.text || '';
+    if (atts.length === 1 && atts[0].kind === 'audio' && atts[0].transcript && !m.text) return 'Voice note: ' + atts[0].transcript;
     const what = atts.length === 1 ? attLabel(atts[0]) : atts.every((a) => a.kind === 'image') ? atts.length + ' photos' : atts.length + ' attachments';
     return m.text ? what + ' · ' + m.text : what;
   }
@@ -928,6 +936,15 @@
     }
     return out;
   }
+  // What was said in a voice note, transcribed on the server when it was sent.
+  function transcriptHtml(a) {
+    if (a.transcript) return '<p class="voice-text" dir="auto">' + esc(a.transcript) + '</p>';
+    if (a.local) return a.transcribing ? '<p class="voice-text muted">Transcribing…</p>' : '';
+    if (a.stt === 'empty') return '<p class="voice-text muted">No speech heard</p>';
+    if (!S.stt) return '';
+    return '<p class="voice-text muted">' + (a.stt === 'failed' ? 'Couldn’t transcribe this voice note' : 'No transcript yet') +
+      ' · <button type="button" class="link-btn" data-act="transcribe">' + (a.stt === 'failed' ? 'Try again' : 'Transcribe') + '</button></p>';
+  }
   function attachmentsHtml(atts) {
     const imgs = atts.filter((a) => a.kind === 'image');
     let html = '';
@@ -946,7 +963,7 @@
           '<button type="button" class="voice-btn" data-act="play" aria-label="Play voice note">' + icon('i-play') + '</button>' +
           '<div class="voice-track" data-act="seek" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="-1">' +
           '<div class="voice-bars">' + bars + '</div><div class="voice-bars voice-fill" aria-hidden="true">' + bars + '</div></div>' +
-          '<span class="voice-time">' + fmtDur(a.duration) + '</span></div>';
+          '<span class="voice-time">' + fmtDur(a.duration) + '</span></div>' + transcriptHtml(a);
       } else if (a.kind !== 'image') {
         html += '<button type="button" class="att-file" data-act="save" data-f="' + esc(a.id) + '" aria-label="Save ' + esc(a.name) + '">' + icon('i-file') +
           '<span class="att-file-text"><span class="att-file-name" dir="auto">' + esc(a.name) + '</span><span class="att-file-meta">' + esc(fmtSize(a.size) + ' · ' + extOf(a.name)) + '</span></span>' +
@@ -1073,7 +1090,7 @@
   /* staging: chosen, pasted or dropped files wait in the tray until Send */
   const tray = $('#tray');
   const fileInput = $('#file-input');
-  const itemView = (it) => ({ id: it.key, kind: it.kind, name: it.name, type: it.type, size: it.size, w: it.w, h: it.h, duration: it.duration, wave: it.wave });
+  const itemView = (it) => ({ id: it.key, local: true, kind: it.kind, name: it.name, type: it.type, size: it.size, w: it.w, h: it.h, duration: it.duration, wave: it.wave });
   const newKey = () => 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
   async function prepareImage(file) {
@@ -1173,9 +1190,15 @@
   }
   function showUploadProgress(p) {
     const el = document.querySelector('#messages [data-temp="' + p.tempId + '"] .msg-meta');
-    if (el) el.textContent = p.state === 'uploading' ? uploadText(p) : 'Sending…';
+    if (el) el.textContent = p.state === 'uploading' && !p.transcribing ? uploadText(p) : 'Sending…';
   }
-  function putPart(id, n, blob, onProgress) {
+  // A voice note's last part is sent; the server now transcribes it before answering.
+  function markTranscribing(p, it) {
+    const v = (p.attachments || []).find((a) => a.id === it.key);
+    if (v && S.stt) { v.transcribing = true; renderMessages(false); }
+    showUploadProgress(p);
+  }
+  function putPart(id, n, blob, onProgress, onSent) {
     return new Promise((resolve, reject) => {
       const x = new XMLHttpRequest();
       x.open('PUT', CFG.apiBase + '/api/upload?id=' + encodeURIComponent(id) + '&n=' + n);
@@ -1183,6 +1206,7 @@
       if (!IS_APP) x.setRequestHeader('X-Mido-As', S.as);
       x.setRequestHeader('Content-Type', 'application/octet-stream');
       x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded); };
+      if (onSent) x.upload.onload = onSent;
       x.onload = () => {
         let d = {}; try { d = JSON.parse(x.responseText); } catch { /* */ }
         if (x.status >= 200 && x.status < 300) resolve(d);
@@ -1198,7 +1222,12 @@
     for (let n = 0; n < meta.parts; n++) {
       const part = it.blob.slice(n * ps, Math.min(it.size, (n + 1) * ps));
       for (let tries = 0; ; tries++) {
-        try { await putPart(meta.id, n, part, (loaded) => onProgress(Math.min(1, (n * ps + loaded) / it.size))); break; }
+        const last = n === meta.parts - 1 && it.kind === 'audio';
+        try {
+          const d = await putPart(meta.id, n, part, (loaded) => onProgress(Math.min(1, (n * ps + loaded) / it.size)), last ? () => onProgress('stt') : null);
+          if (d && d.stt) { it.stt = d.stt; it.transcript = d.transcript || ''; }
+          break;
+        }
         catch (err) { if (tries >= 2 || (err.status && err.status < 500)) throw err; await new Promise((r) => setTimeout(r, 800 * (tries + 1))); }
       }
     }
@@ -1366,7 +1395,12 @@
     const m = S.msgs.find((x) => String(x.i) === li.dataset.i);
     if (!m) return;
     if (act === 'reply') { setReply(m); input.focus(); }
-    if (act === 'copy') copy(m.text);
+    if (act === 'copy') copy(m.text || spokenOf(m));
+    if (act === 'transcribe') {
+      btn.disabled = true; btn.textContent = 'Transcribing…';
+      try { await api('messages', { method: 'PATCH', body: { chat: S.openId, i: m.i, transcribe: true } }); S.ver = undefined; sync(); }
+      catch (err) { toast(err.message); btn.disabled = false; btn.textContent = 'Try again'; }
+    }
     if (act === 'edit') setEditing(m);
     if (act === 'delete') {
       const ok = await dialog({ title: 'Delete this message?', text: 'It will be removed for both of you.', ok: 'Delete', danger: true });

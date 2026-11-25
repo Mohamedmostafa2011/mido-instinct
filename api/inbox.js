@@ -7,7 +7,7 @@ import { attachmentLabel, fmtSize } from '../lib/files.js';
 export default route({
   GET: async ({ req, res, q }) => {
     const base = 'https://' + (req.headers['x-forwarded-host'] || req.headers.host || 'miduinvesting.vercel.app');
-    const file = (a) => ({ kind: a.kind, name: a.name, type: a.type, size: a.size, ...(a.duration ? { duration: a.duration } : {}), url: base + '/api/file?id=' + a.id });
+    const file = (a) => ({ kind: a.kind, name: a.name, type: a.type, size: a.size, ...(a.duration ? { duration: a.duration } : {}), ...(a.kind === 'audio' ? { transcript: a.transcript || null } : {}), url: base + '/api/file?id=' + a.id });
     const { chats } = await listChats('instinct');
     const waiting = chats.filter((c) => c.needsReply);
     const items = [];
@@ -25,7 +25,10 @@ export default route({
       lines.push('', `## ${it.title}  (chat id: ${it.chat})`);
       for (const m of it.messages) {
         lines.push(`[${m.at}] Mido: ${m.text || '(no text)'}`);
-        for (const a of m.attachments) lines.push(`    Attached ${attachmentLabel(a).toLowerCase()}${a.kind === 'file' ? '' : ' ' + a.name}, ${a.type}, ${fmtSize(a.size)}: ${a.url}`);
+        for (const a of m.attachments) {
+          lines.push(`    Attached ${attachmentLabel(a).toLowerCase()}${a.kind === 'file' ? '' : ' ' + a.name}, ${a.type}, ${fmtSize(a.size)}: ${a.url}`);
+          if (a.kind === 'audio') lines.push(a.transcript ? `    Transcript of the voice note: ${a.transcript}` : '    (no transcript: play the voice note from the link)');
+        }
       }
     }
     if (items.some((it) => it.messages.some((m) => m.attachments.length))) {

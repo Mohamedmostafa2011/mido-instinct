@@ -2,12 +2,22 @@ import { route } from '../lib/http.js';
 import { store } from '../lib/store.js';
 import { postMessage, messagesWithIndex } from '../lib/chat.js';
 import { createUpload, putPart, resolveAttachments, deleteFiles } from '../lib/files.js';
+import { sttSettings, transcribeBuffer } from '../lib/transcribe.js';
+
+// One second of silent 16 kHz mono WAV, to check the speech-to-text key without real audio.
+function silentWav() {
+  const n = 16000, b = Buffer.alloc(44 + n * 2);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(16000, 24); b.writeUInt32LE(32000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  return b;
+}
 
 // GET /api/health?key=PASSKEY: end-to-end storage check. Creates a temporary
 // chat, saves two messages through the normal code path, reads them back and
 // deletes the chat again, then does the same with a small file. Messages are posted as Instinct, so no email goes out.
+// Also says whether voice notes get transcribed; add &stt=1 to test the speech-to-text key with a second of silence.
 export default route({
-  GET: async () => {
+  GET: async ({ q }) => {
     const steps = [];
     const t0 = Date.now();
     let chatId = null;
@@ -36,7 +46,13 @@ export default route({
       await store.deleteChat(chatId);
       chatId = null;
       steps.push('deleted the test chat');
-      return { ok: true, storage: store.kind, ms: Date.now() - t0, steps };
+      const s = sttSettings();
+      let transcription = s.enabled ? `on (${s.provider}, ${s.model})` : 'off: set GROQ_API_KEY or OPENAI_API_KEY on Vercel';
+      if (s.enabled && q.stt === '1') {
+        try { await transcribeBuffer(silentWav(), 'audio/wav', s); transcription += ', key works'; }
+        catch (err) { return { ok: false, storage: store.kind, transcription, error: 'speech-to-text test failed: ' + err.message, steps }; }
+      }
+      return { ok: true, storage: store.kind, transcription, ms: Date.now() - t0, steps };
     } catch (err) {
       if (chatId) await store.deleteChat(chatId).catch(() => {});
       return { ok: false, storage: store.kind, error: String(err.message || err), steps };
