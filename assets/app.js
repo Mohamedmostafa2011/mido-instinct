@@ -334,7 +334,7 @@
       const o = d.open;
       if (o && o.id === S.openId) {
         if (o.missing) {
-          if (S.loaded || S.msgs.length) toast('That chat was deleted');
+          if (S.loaded || S.msgs.length) toast(S.storage === 'memory' ? 'Not saved: connect storage in Vercel first' : 'That chat was deleted');
           store.del(LS.last + '.' + S.role);
           startNew({ quiet: true });
         } else {
