@@ -1,5 +1,5 @@
 // Instinct for Windows. Loads the bundled chat UI; the built-in app key means no passkey.
-const { app, BrowserWindow, shell, ipcMain, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Menu, nativeImage, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -94,6 +94,21 @@ ipcMain.on('mido:badge', (_e, n) => {
 });
 
 app.on('second-instance', show);
-app.whenReady().then(createWindow);
+// Only what the chat needs: the microphone for voice notes, notifications and copy.
+const ALLOWED = new Set(['media', 'notifications', 'clipboard-sanitized-write', 'fullscreen']);
+function setupSession() {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((wc, permission, done, details) => {
+    if (permission === 'media') return done(!(details.mediaTypes || []).includes('video')); // microphone only
+    done(ALLOWED.has(permission));
+  });
+  ses.setPermissionCheckHandler((wc, permission) => ALLOWED.has(permission));
+  // Saving an attachment opens the normal Windows "Save as" dialog in Downloads
+  ses.on('will-download', (e, item) => {
+    item.setSaveDialogOptions({ defaultPath: path.join(app.getPath('downloads'), item.getFilename()) });
+  });
+}
+
+app.whenReady().then(() => { setupSession(); createWindow(); });
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => { if (!win) createWindow(); });
