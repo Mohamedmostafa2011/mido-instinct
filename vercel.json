@@ -5,13 +5,7 @@
   "installCommand": "",
   "functions": {
     "api/*.js": {
-      "maxDuration": 15
-    },
-    "api/file.js": {
       "maxDuration": 60
-    },
-    "api/upload.js": {
-      "maxDuration": 30
     }
   },
   "headers": [
