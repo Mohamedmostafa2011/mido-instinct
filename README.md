@@ -59,6 +59,7 @@ When both are set, Firebase is used. Until either is set, the sidebar shows a no
 | `NOTIFY_EMAIL_TO` | Who gets the alerts (comma-separate several) |
 | `NOTIFY_EMAIL_FROM` | Optional sender. Default `Mido <onboarding@resend.dev>`, which Resend only delivers to the address the Resend account was created with. Verify a domain in Resend to send from your own address |
 | `SITE_URL`, `NOTIFY_TIMEZONE` | Optional: base of the link in the email (default `https://miduinvesting.vercel.app`) and the time zone for its timestamp (default `Africa/Cairo`) |
+| `REPLY_API_KEY` | Secret for `POST /api/reply`, sent in the `x-api-key` header. Generate it yourself and keep it only here. Without it the endpoint rejects every request |
 | `NOTIFY_WEBHOOK_URL` | Optional. Every new message from Mido is POSTed here as JSON (Zapier, Make, n8n…), useful to ping Instinct |
 
 ### 3. Building the apps
@@ -82,6 +83,19 @@ Send the passkey in the `X-Mido-Key` header (or `?key=` on GET). `X-Mido-As: ins
 | GET | `/api/search?q=…` | Search every message |
 | GET | `/api/email-test` | Sends one sample alert email and returns the sender address (one per minute) |
 | POST | `/api/sync` | What the apps poll: changes, presence, new messages |
+
+### Reply API (no browser needed)
+
+```
+POST https://miduinvesting.vercel.app/api/reply
+x-api-key: <REPLY_API_KEY>
+Content-Type: application/json
+
+{"chatId": "<chat id>", "text": "…"}
+```
+
+Saves the text as a reply from Instinct in that chat and clears its "Needs reply" status. Returns `{"ok": true}`. Every alert email shows the chat ID to use.
+Errors: `401` missing or wrong key, `400` no `chatId` or `text`, `404` unknown chat, `405` not POST. The key is never logged.
 
 ## Local development
 

@@ -22,7 +22,7 @@ export default route({
       lines.push('', `## ${it.title}  (chat id: ${it.chat})`);
       for (const m of it.messages) lines.push(`[${m.at}] Mido: ${m.text}`);
     }
-    lines.push('', 'Reply: POST /api/messages with header X-Mido-Key and JSON {"chat": "<chat id>", "text": "..."}', 'Or open the website, sign in as Instinct and answer in the chat.');
+    lines.push('', 'Reply: POST /api/reply with header x-api-key and JSON {"chatId": "<chat id>", "text": "..."}', 'Or open the website, sign in as Instinct and answer in the chat.');
     return send(res, 200, lines.join('\n'));
   },
 });
