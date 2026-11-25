@@ -1,6 +1,6 @@
 import { route, clip } from '../lib/http.js';
 import { store } from '../lib/store.js';
-import { newChat, listChats } from '../lib/chat.js';
+import { newChat, listChats, deleteChatAndFiles } from '../lib/chat.js';
 
 // GET    /api/chats              list
 // POST   /api/chats  {title}     create
@@ -24,7 +24,7 @@ export default route({
   DELETE: async ({ body, q }) => {
     const id = String(body.id || q.id || '');
     if (!id) return [400, { error: 'Missing id' }];
-    await store.deleteChat(id);
+    await deleteChatAndFiles(id);
     return { ok: true };
   },
 });

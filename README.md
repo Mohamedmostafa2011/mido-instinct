@@ -81,8 +81,19 @@ Send the passkey in the `X-Mido-Key` header (or `?key=` on GET). `X-Mido-As: ins
 | GET | `/api/messages?chat=<id>` | Full history of a chat |
 | GET | `/api/chats` | All chats with unread / needs-reply flags |
 | GET | `/api/search?q=…` | Search every message |
+| POST | `/api/upload` | `{ "name", "type", "size", "kind": "image"/"audio"/"file" }` starts an upload and returns `{ id, partSize, parts }` |
+| PUT | `/api/upload?id=…&n=…` | Raw bytes of part `n` (2 MB each, in order). Then send the message with `"attachments": ["<id>"]` |
+| GET | `/api/file?id=…` | Downloads an attachment (`&n=…` for one part, `&download=1` to save it) |
 | GET | `/api/email-test` | Sends one sample alert email and returns the sender address (one per minute) |
 | POST | `/api/sync` | What the apps poll: changes, presence, new messages |
+
+### Voice notes, photos and files
+
+The paperclip attaches photos and files (or paste / drag them in on a computer), and the microphone records a voice note: tap it, talk, then tap send, or the bin to discard. Up to 10 attachments per message and 25 MB per file; big photos are scaled down first, like a messenger does.
+
+Attachments are stored in the same Firebase database as the chats, split into 2 MB parts, and can only be downloaded with the passkey or the apps' key. There are no public links. `/api/inbox` lists each attachment with its download link for Instinct. Deleting a message or a chat deletes its files too. Firebase's free plan holds 1 GB, which is many hours of voice notes, but large videos will fill it quickly.
+
+On Android, saving a file opens the share sheet so you can save it to Files or open it in another app. The first voice note asks for microphone access.
 
 ### Reply API (no browser needed)
 

@@ -92,6 +92,7 @@ jobs:
           set -o pipefail
           npm run prepare-web
           npx cap add android
+          node ../scripts/android-manifest.mjs android/app/src/main/AndroidManifest.xml
           npm run android:assets
           npx cap sync android 2>&1 | tee "$RUNNER_TEMP/gen.log" || { echo "::error title=cap sync failed::$(tail -n 30 "$RUNNER_TEMP/gen.log" | sed ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
       - name: Build APK

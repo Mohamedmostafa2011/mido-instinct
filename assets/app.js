@@ -30,7 +30,7 @@
     key: '', as: 'instinct', role: 'mido', via: 'web', storage: 'redis',
     ver: undefined, chats: [], chatMap: new Map(),
     openId: null, msgs: [], count: 0, rev: -1, loaded: false,
-    pending: [], replyTo: null, editing: null, focusMsg: null,
+    pending: [], replyTo: null, editing: null, focusMsg: null, staged: [],
     presence: { online: false },
     filter: 'all', search: '', results: null,
     lastKeyAt: 0, typingSent: false, lastTypingAt: 0, lastHeartbeat: 0,
@@ -407,6 +407,8 @@
   function resetThread() {
     S.msgs = []; S.count = 0; S.rev = -1; S.loaded = false; S.pending = [];
     setReply(null); setEditing(null);
+    if (rec.mr) stopRecording(false);
+    clearStaged();
     $('#messages').innerHTML = '';
     $('#typing').hidden = true;
   }
@@ -660,21 +662,26 @@
       if (m.replyTo && !m.deleted) {
         quote = '<button type="button" class="quote" data-act="goto" data-ref="' + esc(m.replyTo.id) + '"><b>' + esc(m.replyTo.from === S.role ? 'You' : NAMES[m.replyTo.from]) + '</b> · ' + esc(m.replyTo.text) + '</button>';
       }
-      const body = m.deleted ? '<span>Message deleted</span>' : md(m.text);
+      const atts = !m.deleted && m.attachments && m.attachments.length ? m.attachments : null;
+      if (atts) for (const a of atts) attById.set(a.id, a);
+      const body = m.deleted ? '<span>Message deleted</span>'
+        : atts ? attachmentsHtml(atts) + (m.text ? '<div class="caption">' + md(m.text) + '</div>' : '')
+        : md(m.text);
       let actions = '';
       if (!m.pending && !m.deleted) {
         actions = '<span class="msg-actions">' +
           '<button type="button" class="icon-btn" data-act="reply" aria-label="Reply" title="Reply">' + icon('i-reply') + '</button>' +
-          '<button type="button" class="icon-btn" data-act="copy" aria-label="Copy" title="Copy">' + icon('i-copy') + '</button>' +
-          (mine ? '<button type="button" class="icon-btn" data-act="edit" aria-label="Edit" title="Edit">' + icon('i-pencil') + '</button>' +
+          (m.text ? '<button type="button" class="icon-btn" data-act="copy" aria-label="Copy" title="Copy">' + icon('i-copy') + '</button>' : '') +
+          (mine && !(atts && atts.some((a) => a.kind === 'audio') && !m.text) ? '<button type="button" class="icon-btn" data-act="edit" aria-label="Edit" title="Edit">' + icon('i-pencil') + '</button>' : '') +
+          (mine ? 
                   '<button type="button" class="icon-btn" data-act="delete" aria-label="Delete" title="Delete">' + icon('i-trash') + '</button>' : '') +
           '</span>';
       }
-      li.innerHTML = '<div class="msg-row"><div class="bubble' + (m.deleted ? ' deleted' : '') + '">' + quote + body + '</div>' + actions + '</div>';
+      li.innerHTML = '<div class="msg-row"><div class="bubble' + (m.deleted ? ' deleted' : '') + (atts ? ' has-att' + (m.text ? '' : ' bare') : '') + '">' + quote + body + '</div>' + actions + '</div>';
 
       let meta = '';
       if (m.pending) {
-        meta = m.state === 'failed' ? 'Not sent · <button type="button" class="retry" data-act="retry">Try again</button>' : 'Sending…';
+        meta = m.state === 'failed' ? 'Not sent · <button type="button" class="retry" data-act="retry">Try again</button>' : m.state === 'uploading' ? esc(uploadText(m)) : 'Sending…';
       } else if (groupEnd || k === lastMine) {
         meta = esc(fmtTime(m.at)) + (m.editedAt ? ' · edited' : '');
         if (k === lastMine && mine) meta += ' · ' + (seenAt >= m.at ? 'Seen' : 'Sent');
@@ -687,6 +694,8 @@
       prev = m;
     });
     ol.replaceChildren(frag);
+    hydrateMedia();
+    updateVoiceUI();
 
     if (S.focusMsg !== null && S.loaded) {
       const target = ol.querySelector('[data-i="' + S.focusMsg + '"]');
@@ -710,7 +719,15 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px';
   }
-  function updateSend() { $('#send').disabled = !input.value.trim(); }
+  const CAN_RECORD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  function updateSend() {
+    const has = !!input.value.trim() || S.staged.length > 0;
+    const mic = !has && CAN_RECORD && !S.editing;
+    $('#send').disabled = !has && !S.editing;
+    $('#send').hidden = mic;
+    $('#mic-btn').hidden = !mic;
+    $('#attach-btn').hidden = !!S.editing;
+  }
 
   function drafts() { try { return JSON.parse(store.get(LS.drafts, '{}')) || {}; } catch { return {}; } }
   function saveDraft() {
@@ -726,14 +743,15 @@
   }
 
   function setReply(m) {
-    S.replyTo = m ? { id: m.id, from: m.from, text: clip(m.text.replace(/\s+/g, ' '), 140) } : null;
+    S.replyTo = m ? { id: m.id, from: m.from, text: clip(summaryOf(m).replace(/\s+/g, ' '), 140) } : null;
     if (m) S.editing = null;
     renderChip();
   }
   function setEditing(m) {
     if (m && !S.editing) saveDraft();
-    S.editing = m ? { i: m.i, chat: S.openId } : null;
-    if (m) { S.replyTo = null; input.value = m.text; autosize(); updateSend(); input.focus(); }
+    S.editing = m ? { i: m.i, chat: S.openId, hasAtt: !!(m.attachments && m.attachments.length) } : null;
+    if (m) { S.replyTo = null; input.value = m.text; autosize(); input.focus(); }
+    updateSend();
     renderChip();
   }
   function renderChip() {
@@ -741,7 +759,7 @@
     if (S.editing) {
       chip.hidden = false;
       chip.querySelector('use').setAttribute('href', '#i-pencil');
-      $('#composer-chip-text').textContent = 'Editing your message';
+      $('#composer-chip-text').textContent = S.editing.hasAtt ? 'Editing the caption' : 'Editing your message';
     } else if (S.replyTo) {
       chip.hidden = false;
       chip.querySelector('use').setAttribute('href', '#i-reply');
@@ -778,9 +796,9 @@
   $('#composer').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
 
     if (S.editing) {
+      if (!text && !S.editing.hasAtt) return;
       const ed = S.editing;
       setEditing(null);
       input.value = ''; autosize(); updateSend();
@@ -790,21 +808,48 @@
       return;
     }
 
-    const p = { tempId: 't' + Date.now() + Math.random().toString(36).slice(2, 6), text, replyTo: S.replyTo, at: Date.now(), state: 'sending' };
-    S.pending.push(p);
-    input.value = ''; autosize(); updateSend();
-    setReply(null);
+    const items = S.staged.splice(0);
+    if (!text && !items.length) return;
+    input.value = ''; autosize();
+    renderTray();
+    updateSend();
     const d = drafts(); delete d[S.openId || '_new']; store.set(LS.drafts, JSON.stringify(d));
+    queueMessage(text, items);
+  });
+
+  /** Shows a message right away and sends it (uploading its attachments first). */
+  function queueMessage(text, items = []) {
+    const p = {
+      tempId: 't' + Date.now() + Math.random().toString(36).slice(2, 6), text, replyTo: S.replyTo, at: Date.now(), state: 'sending',
+      items, attachments: items.length ? items.map(itemView) : undefined,
+    };
+    S.pending.push(p);
+    setReply(null);
     $('#empty').hidden = true;
     renderMessages(true);
     sendPending(p);
-  });
+  }
 
   async function sendPending(p) {
     const chatId = S.openId;
     p.state = 'sending';
     try {
-      const d = await api('messages', { method: 'POST', body: { chat: chatId, text: p.text, replyTo: p.replyTo } });
+      if (p.items && p.items.some((it) => !it.fileId)) {
+        p.state = 'uploading';
+        renderMessages(false);
+        for (let k = 0; k < p.items.length; k++) {
+          const it = p.items[k];
+          if (it.fileId) continue;
+          p.progress = { k, n: p.items.length, f: 0 };
+          showUploadProgress(p);
+          it.fileId = await uploadItem(it, (f) => { p.progress.f = f; showUploadProgress(p); });
+          media.set(it.fileId, media.get(it.key));
+        }
+        p.state = 'sending';
+        showUploadProgress(p);
+      }
+      const attachments = p.items && p.items.length ? p.items.map((it) => it.fileId) : undefined;
+      const d = await api('messages', { method: 'POST', body: { chat: chatId, text: p.text, replyTo: p.replyTo, attachments } });
       p.id = d.message.id; p.state = 'sent';
       if (!chatId && !S.openId) {
         S.openId = d.chat.id;
@@ -821,6 +866,470 @@
     }
   }
 
+  /* ----------------------------------------------------------- attachments */
+  // Voice notes, photos and files. They are uploaded in parts before the message
+  // is sent, and downloaded with the same key as everything else, so a file is
+  // never reachable by a public link. Downloads are cached as object URLs.
+  const MAX_FILE = 25 * 1024 * 1024;
+  const MAX_STAGED = 10;
+  const PART = 2 * 1024 * 1024;
+  const media = new Map(); // file id or local key -> { url, blob }
+  const loadingMedia = new Map();
+  const attById = new Map();
+
+  const fmtDur = (s) => { s = Math.max(0, Math.round(Number(s) || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const fmtSize = (b) => (b < 1024 ? b + ' B' : b < 1048576 ? Math.round(b / 1024) + ' KB' : (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + ' MB');
+  const extOf = (name) => { const m = /\.([a-z0-9]{1,8})$/i.exec(name || ''); return m ? m[1].toUpperCase() : 'File'; };
+  function attLabel(a) {
+    if (a.kind === 'audio') return 'Voice note' + (a.duration ? ' (' + fmtDur(a.duration) + ')' : '');
+    if (a.kind === 'image') return 'Photo';
+    return a.name || 'File';
+  }
+  function summaryOf(m) {
+    const atts = m.attachments || [];
+    if (!atts.length) return m.text || '';
+    const what = atts.length === 1 ? attLabel(atts[0]) : atts.every((a) => a.kind === 'image') ? atts.length + ' photos' : atts.length + ' attachments';
+    return m.text ? what + ' · ' + m.text : what;
+  }
+
+  async function fetchPart(id, n) {
+    const headers = { 'X-Mido-Key': S.key };
+    let res;
+    try { res = await fetch(CFG.apiBase + '/api/file?id=' + encodeURIComponent(id) + '&n=' + n, { headers }); }
+    catch { throw new Error('Can’t reach the server'); }
+    if (!res.ok) throw new Error(res.status === 404 ? 'This file is no longer available' : 'Download failed (' + res.status + ')');
+    return res.blob();
+  }
+  function loadMedia(a) {
+    if (media.has(a.id)) return Promise.resolve(media.get(a.id));
+    if (loadingMedia.has(a.id)) return loadingMedia.get(a.id);
+    const job = (async () => {
+      const parts = a.parts || Math.max(1, Math.ceil(a.size / PART));
+      const blobs = [];
+      for (let n = 0; n < parts; n++) blobs.push(await fetchPart(a.id, n));
+      const blob = new Blob(blobs, { type: a.type });
+      const v = { blob, url: URL.createObjectURL(blob) };
+      media.set(a.id, v);
+      return v;
+    })();
+    loadingMedia.set(a.id, job);
+    job.then(() => loadingMedia.delete(a.id), () => loadingMedia.delete(a.id));
+    return job;
+  }
+
+  /* render */
+  function waveBars(wave) {
+    const w = wave && /^[0-9]+$/.test(wave) ? wave : '3445565443344556654433455665443345566544';
+    const n = 36;
+    let out = '';
+    for (let k = 0; k < n; k++) {
+      const v = Number(w[Math.floor((k * w.length) / n)]) || 0;
+      out += '<span style="height:' + (16 + v * 9.3).toFixed(0) + '%"></span>';
+    }
+    return out;
+  }
+  function attachmentsHtml(atts) {
+    const imgs = atts.filter((a) => a.kind === 'image');
+    let html = '';
+    if (imgs.length) {
+      html += '<div class="att-grid n' + Math.min(imgs.length, 4) + '">' + imgs.map((a, k) => {
+        const ratio = imgs.length === 1 && a.w && a.h ? Math.min(2, Math.max(0.6, a.w / a.h)).toFixed(3) : null;
+        const cached = media.get(a.id);
+        return '<button type="button" class="att-img' + (imgs.length === 3 && k === 0 ? ' wide' : '') + '" data-act="view" data-f="' + esc(a.id) + '" aria-label="Open photo"' + (ratio ? ' style="aspect-ratio:' + ratio + '"' : '') + '>' +
+          '<img alt="" data-f="' + esc(a.id) + '"' + (cached ? ' src="' + cached.url + '"' : '') + '></button>';
+      }).join('') + '</div>';
+    }
+    for (const a of atts) {
+      if (a.kind === 'audio') {
+        const bars = waveBars(a.wave);
+        html += '<div class="voice" data-f="' + esc(a.id) + '">' +
+          '<button type="button" class="voice-btn" data-act="play" aria-label="Play voice note">' + icon('i-play') + '</button>' +
+          '<div class="voice-track" data-act="seek" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="-1">' +
+          '<div class="voice-bars">' + bars + '</div><div class="voice-bars voice-fill" aria-hidden="true">' + bars + '</div></div>' +
+          '<span class="voice-time">' + fmtDur(a.duration) + '</span></div>';
+      } else if (a.kind !== 'image') {
+        html += '<button type="button" class="att-file" data-act="save" data-f="' + esc(a.id) + '" aria-label="Save ' + esc(a.name) + '">' + icon('i-file') +
+          '<span class="att-file-text"><span class="att-file-name" dir="auto">' + esc(a.name) + '</span><span class="att-file-meta">' + esc(fmtSize(a.size) + ' · ' + extOf(a.name)) + '</span></span>' +
+          icon('i-download') + '</button>';
+      }
+    }
+    return '<div class="atts">' + html + '</div>';
+  }
+  function hydrateMedia() {
+    document.querySelectorAll('#messages img[data-f]:not([src])').forEach((img) => {
+      const a = attById.get(img.dataset.f);
+      if (!a) return;
+      loadMedia(a).then((v) => { img.src = v.url; }).catch(() => { img.closest('.att-img')?.classList.add('broken'); });
+    });
+  }
+
+  /* voice player: one audio element for every note */
+  const player = { audio: new Audio(), id: null, raf: 0 };
+  player.audio.preload = 'auto';
+  function voiceDuration(a) {
+    const d = player.audio.duration;
+    return player.id === a.id && Number.isFinite(d) && d > 0 ? d : a.duration || 0;
+  }
+  function updateVoiceUI() {
+    document.querySelectorAll('#messages .voice').forEach((el) => {
+      const a = attById.get(el.dataset.f);
+      if (!a) return;
+      const on = player.id === a.id;
+      const playing = on && !player.audio.paused;
+      const cur = on ? player.audio.currentTime : 0;
+      const dur = voiceDuration(a);
+      const p = dur ? Math.min(1, cur / dur) : 0;
+      el.style.setProperty('--p', (p * 100).toFixed(2) + '%');
+      el.classList.toggle('playing', playing);
+      const btn = el.querySelector('.voice-btn');
+      btn.querySelector('use').setAttribute('href', playing ? '#i-pause' : '#i-play');
+      btn.setAttribute('aria-label', playing ? 'Pause voice note' : 'Play voice note');
+      el.querySelector('.voice-track').setAttribute('aria-valuenow', String(Math.round(p * 100)));
+      el.querySelector('.voice-time').textContent = fmtDur(on && cur > 0 ? cur : a.duration);
+    });
+  }
+  function voiceLoop() {
+    cancelAnimationFrame(player.raf);
+    updateVoiceUI();
+    if (!player.audio.paused) player.raf = requestAnimationFrame(voiceLoop);
+  }
+  ['play', 'pause', 'ended', 'seeked', 'loadedmetadata'].forEach((ev) => player.audio.addEventListener(ev, voiceLoop));
+  player.audio.addEventListener('ended', () => { player.audio.currentTime = 0; updateVoiceUI(); });
+  async function togglePlay(a, at = null) {
+    if (player.id === a.id && player.audio.src) {
+      if (at !== null) { player.audio.currentTime = at * voiceDuration(a); if (player.audio.paused) player.audio.play().catch(() => {}); return; }
+      if (player.audio.paused) player.audio.play().catch(() => toast('Couldn’t play this voice note'));
+      else player.audio.pause();
+      return;
+    }
+    player.audio.pause();
+    player.id = a.id;
+    player.audio.removeAttribute('src');
+    updateVoiceUI();
+    try {
+      const v = await loadMedia(a);
+      if (player.id !== a.id) return;
+      player.audio.src = v.url;
+      if (at !== null) player.audio.currentTime = at * (a.duration || 0);
+      await player.audio.play();
+    } catch (err) {
+      if (player.id === a.id) { player.id = null; updateVoiceUI(); }
+      toast(err && err.message && !/play\(\)|interrupted/i.test(err.message) ? err.message : 'Couldn’t play this voice note');
+    }
+  }
+  function seekVoice(a, track, e) {
+    const r = track.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    togglePlay(a, document.documentElement.dir === 'rtl' ? 1 - x : x);
+  }
+
+  /* photo viewer */
+  const viewer = $('#viewer');
+  async function viewImage(a) {
+    try {
+      const v = await loadMedia(a);
+      $('#viewer-img').src = v.url;
+      $('#viewer-name').textContent = a.name;
+      viewer.dataset.f = a.id;
+      viewer.showModal();
+    } catch (err) { toast(err.message); }
+  }
+  $('#viewer-close').addEventListener('click', () => viewer.close());
+  $('#viewer-save').addEventListener('click', () => { const a = attById.get(viewer.dataset.f); if (a) saveAttachment(a); });
+  $('#viewer-stage').addEventListener('click', (e) => { if (e.target.id !== 'viewer-img') viewer.close(); });
+  viewer.addEventListener('close', () => { $('#viewer-img').removeAttribute('src'); });
+
+  /* saving: the Android app hands the file to the share sheet, everything else downloads it */
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+  async function saveAttachment(a) {
+    let v;
+    try {
+      if (!media.has(a.id) && a.size > 512 * 1024) toast('Downloading ' + a.name);
+      v = await loadMedia(a);
+    } catch (err) { toast(err.message); return; }
+    const P = window.Capacitor && window.Capacitor.Plugins;
+    if (P && P.Filesystem && P.Share) {
+      try {
+        const safe = (a.name || 'file').replace(/[\\/:*?"<>|]+/g, '_');
+        const w = await P.Filesystem.writeFile({ path: 'shared/' + safe, data: await blobToBase64(v.blob), directory: 'CACHE', recursive: true });
+        await P.Share.share({ title: a.name, files: [w.uri], dialogTitle: 'Save or open' });
+      } catch (err) {
+        if (!/cancel/i.test(String(err && err.message))) toast('Couldn’t open the file');
+      }
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = v.url; link.download = a.name || 'file';
+    document.body.appendChild(link); link.click(); link.remove();
+  }
+
+  /* staging: chosen, pasted or dropped files wait in the tray until Send */
+  const tray = $('#tray');
+  const fileInput = $('#file-input');
+  const itemView = (it) => ({ id: it.key, kind: it.kind, name: it.name, type: it.type, size: it.size, w: it.w, h: it.h, duration: it.duration, wave: it.wave });
+  const newKey = () => 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+  async function prepareImage(file) {
+    let bmp;
+    try { bmp = await createImageBitmap(file); } catch { return null; } // not decodable here (e.g. HEIC): send as a file
+    const w = bmp.width, h = bmp.height;
+    const big = file.size > 2.5 * 1024 * 1024 || Math.max(w, h) > 4096;
+    if (!big || file.type === 'image/gif') { bmp.close && bmp.close(); return { blob: file, w, h }; }
+    // Large photos are scaled down like a messenger would, keeping them sharp but small
+    const scale = Math.min(1, 2560 / Math.max(w, h));
+    const cw = Math.round(w * scale), ch = Math.round(h * scale);
+    const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    const ctx = c.getContext('2d');
+    const type = file.type === 'image/png' || file.type === 'image/webp' ? 'image/webp' : 'image/jpeg';
+    if (type === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch); }
+    ctx.drawImage(bmp, 0, 0, cw, ch);
+    bmp.close && bmp.close();
+    const blob = await new Promise((r) => c.toBlob(r, type, 0.86));
+    if (!blob || blob.size >= file.size) return { blob: file, w, h };
+    return { blob, w: cw, h: ch, ext: type === 'image/webp' ? 'webp' : 'jpg' };
+  }
+
+  async function stageFiles(list) {
+    const files = [...list].filter((f) => f && f.size !== undefined);
+    if (!files.length) return;
+    if (S.editing) { toast('Finish editing first'); return; }
+    for (const f of files) {
+      if (S.staged.length >= MAX_STAGED) { toast('Up to ' + MAX_STAGED + ' attachments per message'); break; }
+      if (!f.size) { toast('“' + (f.name || 'File') + '” is empty'); continue; }
+      if (f.size > MAX_FILE) { toast('“' + (f.name || 'File') + '” is over 25 MB'); continue; }
+      let blob = f, kind = 'file', w, h;
+      let name = f.name || (f.type.startsWith('image/') ? 'Photo.' + (f.type.split('/')[1] || 'png') : 'File');
+      if (/^image\/(jpeg|png|gif|webp|avif|bmp)$/.test(f.type)) {
+        const img = await prepareImage(f);
+        if (img) {
+          kind = 'image'; blob = img.blob; w = img.w; h = img.h;
+          if (img.ext) name = name.replace(/\.[a-z0-9]+$/i, '') + '.' + img.ext;
+        }
+      }
+      const it = { key: newKey(), blob, name, type: blob.type || 'application/octet-stream', size: blob.size, kind, w, h };
+      media.set(it.key, { blob, url: URL.createObjectURL(blob) });
+      S.staged.push(it);
+    }
+    renderTray();
+    updateSend();
+    if (!TOUCH) input.focus();
+  }
+  function clearStaged() {
+    for (const it of S.staged) { const v = media.get(it.key); if (v) URL.revokeObjectURL(v.url); media.delete(it.key); }
+    S.staged = [];
+    renderTray();
+  }
+  function renderTray() {
+    tray.hidden = !S.staged.length;
+    tray.innerHTML = S.staged.map((it) => {
+      const v = media.get(it.key);
+      return '<div class="tray-item' + (it.kind === 'image' ? ' is-img' : '') + '">' +
+        (it.kind === 'image' ? '<img src="' + v.url + '" alt="' + esc(it.name) + '">'
+          : icon('i-file') + '<span class="tray-text"><span class="tray-name" dir="auto">' + esc(it.name) + '</span><span class="tray-size">' + esc(fmtSize(it.size)) + '</span></span>') +
+        '<button type="button" class="tray-x" data-key="' + it.key + '" aria-label="Remove ' + esc(it.name) + '">' + icon('i-x') + '</button></div>';
+    }).join('');
+  }
+  tray.addEventListener('click', (e) => {
+    const b = e.target.closest('.tray-x'); if (!b) return;
+    const k = S.staged.findIndex((it) => it.key === b.dataset.key);
+    if (k < 0) return;
+    const [it] = S.staged.splice(k, 1);
+    const v = media.get(it.key); if (v) URL.revokeObjectURL(v.url); media.delete(it.key);
+    renderTray(); updateSend(); input.focus();
+  });
+  $('#attach-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { stageFiles(fileInput.files); fileInput.value = ''; });
+  input.addEventListener('paste', (e) => {
+    const files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); stageFiles(files); }
+  });
+  const thread = $('#thread');
+  let dragDepth = 0;
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+  thread.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $('#drop-hint').hidden = false; });
+  thread.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+  thread.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop-hint').hidden = true; } });
+  thread.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dragDepth = 0; $('#drop-hint').hidden = true;
+    stageFiles(e.dataTransfer.files);
+  });
+  window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); }); // never open a dropped file in place of the app
+  window.addEventListener('drop', (e) => { if (hasFiles(e)) e.preventDefault(); });
+
+  /* uploading */
+  function uploadText(p) {
+    const g = p.progress;
+    if (!g) return 'Uploading…';
+    const pct = Math.round(g.f * 100) + '%';
+    return g.n > 1 ? 'Uploading ' + (g.k + 1) + ' of ' + g.n + ' · ' + pct : 'Uploading ' + pct;
+  }
+  function showUploadProgress(p) {
+    const el = document.querySelector('#messages [data-temp="' + p.tempId + '"] .msg-meta');
+    if (el) el.textContent = p.state === 'uploading' ? uploadText(p) : 'Sending…';
+  }
+  function putPart(id, n, blob, onProgress) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', CFG.apiBase + '/api/upload?id=' + encodeURIComponent(id) + '&n=' + n);
+      x.setRequestHeader('X-Mido-Key', S.key);
+      if (!IS_APP) x.setRequestHeader('X-Mido-As', S.as);
+      x.setRequestHeader('Content-Type', 'application/octet-stream');
+      x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded); };
+      x.onload = () => {
+        let d = {}; try { d = JSON.parse(x.responseText); } catch { /* */ }
+        if (x.status >= 200 && x.status < 300) resolve(d);
+        else { const err = new Error(d.error || 'Upload failed (' + x.status + ')'); err.status = x.status; reject(err); }
+      };
+      x.onerror = () => { const err = new Error('Can’t reach the server'); err.status = 0; reject(err); };
+      x.send(blob);
+    });
+  }
+  async function uploadItem(it, onProgress) {
+    const meta = await api('upload', { method: 'POST', body: { name: it.name, type: it.type, size: it.size, kind: it.kind, duration: it.duration, wave: it.wave, w: it.w, h: it.h } });
+    const ps = meta.partSize || PART;
+    for (let n = 0; n < meta.parts; n++) {
+      const part = it.blob.slice(n * ps, Math.min(it.size, (n + 1) * ps));
+      for (let tries = 0; ; tries++) {
+        try { await putPart(meta.id, n, part, (loaded) => onProgress(Math.min(1, (n * ps + loaded) / it.size))); break; }
+        catch (err) { if (tries >= 2 || (err.status && err.status < 500)) throw err; await new Promise((r) => setTimeout(r, 800 * (tries + 1))); }
+      }
+    }
+    onProgress(1);
+    return meta.id;
+  }
+
+  /* voice notes */
+  const rec = { mr: null, stream: null, chunks: [], start: 0, levels: [], raf: 0, ctx: null, analyser: null, send: false, lastPush: 0, buf: null };
+  const MAX_REC_S = 15 * 60;
+  async function startRecording() {
+    if (rec.mr || S.editing) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (err) {
+      const n = err && err.name;
+      toast(n === 'NotAllowedError' || n === 'SecurityError' ? 'Allow microphone access to record voice notes'
+        : n === 'NotFoundError' ? 'No microphone found' : 'Couldn’t start recording');
+      return;
+    }
+    const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+    let mr;
+    try { mr = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 48000 } : undefined); }
+    catch { stream.getTracks().forEach((t) => t.stop()); toast('Couldn’t start recording'); return; }
+    Object.assign(rec, { mr, stream, chunks: [], levels: [], start: Date.now(), send: false, lastPush: 0 });
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
+    mr.onstop = finishRecording;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      rec.ctx = new AC();
+      const src = rec.ctx.createMediaStreamSource(stream);
+      rec.analyser = rec.ctx.createAnalyser();
+      rec.analyser.fftSize = 1024;
+      rec.buf = new Uint8Array(rec.analyser.fftSize);
+      src.connect(rec.analyser);
+    } catch { rec.analyser = null; }
+    mr.start(500);
+    $('#composer-box').hidden = true;
+    $('#recorder').hidden = false;
+    $('#rec-time').textContent = '0:00';
+    sizeRecCanvas();
+    recLoop();
+    $('#rec-send').focus();
+  }
+  function sizeRecCanvas() {
+    const c = $('#rec-wave');
+    const r = c.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    c.width = Math.max(1, Math.round(r.width * dpr)); c.height = Math.max(1, Math.round(r.height * dpr));
+  }
+  function recLoop() {
+    if (!rec.mr) return;
+    const now = Date.now();
+    const secs = (now - rec.start) / 1000;
+    $('#rec-time').textContent = fmtDur(Math.floor(secs));
+    if (rec.analyser && now - rec.lastPush > 70) {
+      rec.analyser.getByteTimeDomainData(rec.buf);
+      let sum = 0;
+      for (let k = 0; k < rec.buf.length; k++) { const v = (rec.buf[k] - 128) / 128; sum += v * v; }
+      rec.levels.push(Math.sqrt(sum / rec.buf.length));
+      rec.lastPush = now;
+      drawRecWave();
+    }
+    if (secs >= MAX_REC_S) { stopRecording(true); return; }
+    rec.raf = requestAnimationFrame(recLoop);
+  }
+  function drawRecWave() {
+    const c = $('#rec-wave');
+    const ctx = c.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const bw = 3 * dpr, gap = 2 * dpr, step = bw + gap;
+    const n = Math.floor(c.width / step);
+    const lv = rec.levels.slice(-n);
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ink-2') || '#58544d';
+    for (let k = 0; k < lv.length; k++) {
+      const v = Math.min(1, lv[k] * 4.5);
+      const bh = Math.max(3 * dpr, v * c.height);
+      const x = c.width - (lv.length - k) * step;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, (c.height - bh) / 2, bw, bh, bw / 2); else ctx.rect(x, (c.height - bh) / 2, bw, bh);
+      ctx.fill();
+    }
+  }
+  function stopRecording(send) {
+    if (!rec.mr) return;
+    rec.send = send;
+    rec.duration = (Date.now() - rec.start) / 1000;
+    cancelAnimationFrame(rec.raf);
+    try { if (rec.mr.state !== 'inactive') rec.mr.stop(); } catch { /* */ }
+    rec.stream.getTracks().forEach((t) => t.stop());
+    if (rec.ctx) rec.ctx.close().catch(() => {});
+    $('#recorder').hidden = true;
+    $('#composer-box').hidden = false;
+    if (!send) { rec.mr = null; rec.chunks = []; }
+    if (!TOUCH) input.focus();
+  }
+  function compressWave(levels, n = 40) {
+    if (!levels.length) return '';
+    const max = Math.max(...levels) || 1;
+    let out = '';
+    for (let k = 0; k < n; k++) {
+      const a = Math.floor((k * levels.length) / n), b = Math.max(a + 1, Math.floor(((k + 1) * levels.length) / n));
+      const peak = Math.max(...levels.slice(a, b));
+      out += Math.min(9, Math.round(9 * Math.pow(peak / max, 0.7)));
+    }
+    return out;
+  }
+  function finishRecording() {
+    const mr = rec.mr;
+    rec.mr = null;
+    if (!rec.send || !mr) return;
+    if (rec.duration < 0.7) { toast('Too short to send'); return; }
+    const type = (mr.mimeType || 'audio/webm').split(';')[0];
+    const blob = new Blob(rec.chunks, { type });
+    rec.chunks = [];
+    if (blob.size > MAX_FILE) { toast('That voice note is too long to send'); return; }
+    const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'm4a' : 'webm';
+    const it = { key: newKey(), blob, name: 'Voice note.' + ext, type, size: blob.size, kind: 'audio', duration: Math.round(rec.duration * 10) / 10, wave: compressWave(rec.levels) };
+    media.set(it.key, { blob, url: URL.createObjectURL(blob) });
+    queueMessage('', [it]);
+  }
+  $('#mic-btn').addEventListener('click', startRecording);
+  $('#rec-cancel').addEventListener('click', () => stopRecording(false));
+  $('#rec-send').addEventListener('click', () => stopRecording(true));
+  $('#recorder').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); stopRecording(false); }
+  });
+  window.addEventListener('resize', () => { if (rec.mr) sizeRecCanvas(); });
+
   /* --------------------------------------------------------------- events */
 
   $('#messages').addEventListener('click', async (e) => {
@@ -834,6 +1343,15 @@
       return;
     }
     const act = btn.dataset.act;
+    if (act === 'view' || act === 'save' || act === 'play' || act === 'seek') {
+      const a = attById.get(btn.dataset.f || btn.closest('[data-f]')?.dataset.f);
+      if (!a) return;
+      if (act === 'view') viewImage(a);
+      if (act === 'save') saveAttachment(a);
+      if (act === 'play') togglePlay(a);
+      if (act === 'seek') seekVoice(a, btn, e);
+      return;
+    }
     if (act === 'retry') {
       const p = S.pending.find((x) => x.tempId === li.dataset.temp);
       if (p) { p.state = 'sending'; renderMessages(false); sendPending(p); }
@@ -979,6 +1497,8 @@
   const capApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
   if (capApp) {
     capApp.addListener('backButton', () => {
+      if ($('#viewer').open) { $('#viewer').close(); return; }
+      if (rec.mr) { stopRecording(false); return; }
       if (!$('#dialog').open && $('#shell').classList.contains('viewing') && narrow()) backToList();
       else capApp.minimizeApp ? capApp.minimizeApp() : capApp.exitApp();
     });

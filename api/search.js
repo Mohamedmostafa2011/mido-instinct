@@ -12,12 +12,14 @@ export default route({
     for (const chat of Object.values(chats)) {
       const titleHit = chat.title.toLowerCase().includes(term);
       const msgs = await messagesWithIndex(chat.id);
-      const hits = msgs.filter((m) => !m.deleted && m.text.toLowerCase().includes(term));
+      const words = (m) => m.text + ' ' + (m.attachments || []).map((a) => a.name).join(' ');
+      const hits = msgs.filter((m) => !m.deleted && words(m).toLowerCase().includes(term));
       if (titleHit && !hits.length) results.push({ chat: chat.id, title: chat.title, i: null, from: null, at: chat.updatedAt, snippet: chat.last?.text || '' });
       for (const m of hits.slice(-5)) {
-        const pos = m.text.toLowerCase().indexOf(term);
+        const all = words(m).trim();
+        const pos = all.toLowerCase().indexOf(term);
         const from = Math.max(0, pos - 40);
-        results.push({ chat: chat.id, title: chat.title, i: m.i, from: m.from, at: m.at, snippet: (from ? '…' : '') + clip(m.text.slice(from), 120) });
+        results.push({ chat: chat.id, title: chat.title, i: m.i, from: m.from, at: m.at, snippet: (from ? '…' : '') + clip(all.slice(from), 120) });
       }
     }
     results.sort((a, b) => b.at - a.at);
