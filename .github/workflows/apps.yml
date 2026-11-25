@@ -88,28 +88,31 @@ jobs:
       - name: Generate Android project
         working-directory: mobile
         run: |
+          set -o pipefail
           npm run prepare-web
           npx cap add android
           npm run android:assets
-          npx cap sync android
-      - name: Build signed APK
-        working-directory: mobile
+          npx cap sync android 2>&1 | tee "$RUNNER_TEMP/gen.log" || { echo "::error title=cap sync failed::$(tail -n 30 "$RUNNER_TEMP/gen.log" | sed ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
+      - name: Build APK
+        working-directory: mobile/android
         run: |
+          set -o pipefail
+          report() { echo "::error title=Android build failed::$( (grep -A25 "What went wrong" "$RUNNER_TEMP/build.log" || tail -n 40 "$RUNNER_TEMP/build.log") | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"; exit 1; }
+          chmod +x gradlew
           if [ -n "$ANDROID_KEYSTORE_FILE" ]; then
-            npx cap build android \
-              --keystorepath "$ANDROID_KEYSTORE_FILE" \
-              --keystorepass "$ANDROID_KEYSTORE_PASSWORD" \
-              --keystorealias instinct \
-              --keystorealiaspass "$ANDROID_KEYSTORE_PASSWORD" \
-              --signing-type apksigner \
-              --androidreleasetype APK
-            APK=$(ls android/app/build/outputs/apk/release/*-signed.apk 2>/dev/null || ls android/app/build/outputs/apk/release/*.apk | head -1)
+            ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log" || report
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            UNSIGNED=$(ls app/build/outputs/apk/release/*.apk | head -1)
+            "$BT/zipalign" -f -p 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" sign --ks "$ANDROID_KEYSTORE_FILE" --ks-type PKCS12 --ks-key-alias instinct \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD \
+              --out "$GITHUB_WORKSPACE/Instinct.apk" "$RUNNER_TEMP/aligned.apk" 2>&1 | tee "$RUNNER_TEMP/build.log" || report
+            "$BT/apksigner" verify --print-certs "$GITHUB_WORKSPACE/Instinct.apk" | head -3
           else
             echo "::warning::No Android keystore on Vercel, building a debug APK"
-            (cd android && ./gradlew assembleDebug --no-daemon)
-            APK=android/app/build/outputs/apk/debug/app-debug.apk
+            ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log" || report
+            cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/Instinct.apk"
           fi
-          cp "$APK" "$GITHUB_WORKSPACE/Instinct.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: android
