@@ -9,7 +9,7 @@
       appKey: '',
       platform: 'web',
       version: '1.0.0',
-      releasesUrl: 'https://github.com/Mohamedmostafa2011/mido-instinct/releases/latest',
+      releasesUrl: 'https://github.com/Mohamedmostafa2011/mido-instinct/actions/workflows/apps.yml',
     },
     window.MIDO_CONFIG || {}
   );

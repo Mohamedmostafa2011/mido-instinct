@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
@@ -65,6 +65,7 @@ jobs:
           name: windows
           path: Instinct-Setup.exe
           if-no-files-found: error
+          retention-days: 90
 
   android:
     name: Android app
@@ -118,41 +119,18 @@ jobs:
           name: android
           path: Instinct.apk
           if-no-files-found: error
+          retention-days: 90
 
-  # The apps carry the app key, so they are only published as a release while the
-  # repository is private. On a public repository they stay as workflow artifacts
-  # (Actions tab → this run → Artifacts), which only signed-in GitHub users can fetch.
-  release:
-    name: Publish release
-    needs: [windows, android]
-    if: github.event.repository.private
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-      - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: build-${{ github.run_number }}
-        run: |
-          gh release create "$TAG" Instinct-Setup.exe Instinct.apk \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Instinct apps · build ${{ github.run_number }}" \
-            --notes "Windows installer and Android app built from ${GITHUB_SHA::7} on ${GITHUB_REF_NAME}. Both open straight into the chats without a passkey." \
-            --latest
-
-  public-note:
+  # The apps carry the app key, so they are never published. They stay as private
+  # workflow artifacts: Actions → this run → Artifacts.
+  summary:
     name: Downloads
     needs: [windows, android]
-    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "::warning::This repository is public, so the apps were not published as a release (they contain the app key). Download them from this run's Artifacts, or make the repository private to get release links."
           {
             echo "### Apps are ready"
-            echo "Download **windows** (Instinct-Setup.exe) and **android** (Instinct.apk) from the Artifacts section of this run."
-            echo "Make the repository private to have them published at releases/latest instead."
+            echo "Download **windows** (Instinct-Setup.exe) and **android** (Instinct.apk) from the Artifacts section below."
+            echo "They open without the passkey, so keep them to yourself."
           } >> "$GITHUB_STEP_SUMMARY"

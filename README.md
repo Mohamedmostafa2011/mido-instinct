@@ -2,9 +2,9 @@
 
 A private chat line between Mido and [Instinct](https://instinct.com). Mido writes, Instinct opens the website in its own browser and answers, and every chat is saved with its history.
 
-- **Website:** https://mido-instinct.vercel.app (also https://miduinvesting.vercel.app). Asks for the passkey once, then remembers it in that browser.
-- **Windows app:** `Instinct-Setup.exe`, a normal installer. Opens straight into the chats, no passkey.
-- **Android app:** `Instinct.apk`. Opens straight into the chats, no passkey.
+- **Website:** https://miduinvesting.vercel.app (also https://mido-instinct.vercel.app). Asks for the passkey once, then remembers it in that browser.
+- **Windows app:** `Instinct-Setup.exe`, a normal installer. Opens straight into the chats, no passkey. Private, not published.
+- **Android app:** `Instinct.apk`. Opens straight into the chats, no passkey. Private, not published.
 
 All three use the same design and the same chats.
 
@@ -49,9 +49,7 @@ In Vercel: **mido-instinct → Storage → Create Database → Upstash for Redis
 
 `.github/workflows/apps.yml` builds both apps on every push that touches the UI or app code (or from **Actions → Build apps → Run workflow**). It needs no GitHub secrets: it trades its GitHub OIDC token for `APP_KEY` and the Android keystore at `/api/provision`, which only answers this repository's workflow.
 
-- **Private repository:** the files are published as a GitHub release, always at
-  `releases/latest/download/Instinct-Setup.exe` and `releases/latest/download/Instinct.apk`.
-- **Public repository:** the apps contain the app key, so they are not published publicly. Download them from the run's **Artifacts** instead (needs a GitHub login). Making the repository private is recommended.
+The apps are **never published**. They contain the app key, so they stay private: open **Actions → Build apps → the latest green run → Artifacts** (signed in to GitHub) and download `windows` (Instinct-Setup.exe) and `android` (Instinct.apk). Artifacts are kept for 90 days; run the workflow again for fresh copies. Don't share the files. If one ever leaks, change `APP_KEY` on Vercel and rebuild.
 
 Windows may show SmartScreen ("unknown publisher") the first time because the installer isn't code-signed: **More info → Run anyway**. On Android, allow installing from your browser or file manager when asked.
 
