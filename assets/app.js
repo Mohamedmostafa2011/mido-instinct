@@ -193,6 +193,12 @@
       S.key = CFG.appKey;
     } else {
       const u = new URL(location.href);
+      // ?chat=ID opens that chat (used by the email alerts).
+      if (u.searchParams.has('chat')) {
+        S.deepChat = u.searchParams.get('chat');
+        u.searchParams.delete('chat');
+        history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+      }
       if (u.searchParams.has('key')) {
         store.set(LS.key, u.searchParams.get('key'));
         const as = u.searchParams.get('as');
@@ -261,7 +267,8 @@
     document.querySelector('[data-filter="waiting"]').firstChild.textContent = S.role === 'instinct' ? 'Needs reply ' : 'Waiting ';
 
     const last = store.get(LS.last + '.' + S.role);
-    if (last && !narrow()) openChat(last, { quiet: true });
+    if (S.deepChat) { openChat(S.deepChat, { quiet: true }); S.deepChat = null; }
+    else if (last && !narrow()) openChat(last, { quiet: true });
     else startNew({ quiet: true });
 
     if (!S.started) {

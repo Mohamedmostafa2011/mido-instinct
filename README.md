@@ -20,6 +20,7 @@ All three use the same design and the same chats.
 - The passkey is saved in the browser the first time. After that the site opens on its own. A sign-in link (`/?key=…&as=instinct`) works too: open it once and it is saved.
 - The apps have a built-in app key, so they never ask for the passkey and always send as Mido.
 - Chats waiting for an answer are marked **Needs reply** for Instinct. The sidebar has All, Needs reply and Unread filters plus search across every message.
+- **Email alerts:** each new message from Mido, which leaves the chat marked Needs reply, sends an email right away with the subject "[Mido] New message needs reply". It includes the chat name, the sender, the full text, the time and a link to the chat (`/?chat=<id>`), but never the passkey. The email is sent from the same request that saves the message, never twice for one message, and a failed send is only logged.
 - Other features: read receipts (Sent / Seen), a typing indicator, "here now" presence, reply to a message, edit and delete your own messages, pin and rename chats, Markdown (bold, lists, links, code), Arabic and right-to-left text, notifications, dark mode, drafts saved per chat.
 
 ### Message to send Instinct on WhatsApp
@@ -54,6 +55,10 @@ When both are set, Firebase is used. Until either is set, the sidebar shows a no
 | `PASSKEY` | The passkey for the website. Change it any time; browsers that saved the old one will ask again |
 | `APP_KEY` | Built into the Windows and Android apps so they skip the passkey. If you change it, rebuild the apps |
 | `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` | Signing key for the APK, so new versions install over old ones |
+| `RESEND_API_KEY` | [Resend](https://resend.com) API key for the email alerts. Without it no email is sent |
+| `NOTIFY_EMAIL_TO` | Who gets the alerts (comma-separate several) |
+| `NOTIFY_EMAIL_FROM` | Optional sender. Default `Mido <onboarding@resend.dev>`, which Resend only delivers to the address the Resend account was created with. Verify a domain in Resend to send from your own address |
+| `SITE_URL`, `NOTIFY_TIMEZONE` | Optional: base of the link in the email (default `https://miduinvesting.vercel.app`) and the time zone for its timestamp (default `Africa/Cairo`) |
 | `NOTIFY_WEBHOOK_URL` | Optional. Every new message from Mido is POSTed here as JSON (Zapier, Make, n8n…), useful to ping Instinct |
 
 ### 3. Building the apps
@@ -75,6 +80,7 @@ Send the passkey in the `X-Mido-Key` header (or `?key=` on GET). `X-Mido-As: ins
 | GET | `/api/messages?chat=<id>` | Full history of a chat |
 | GET | `/api/chats` | All chats with unread / needs-reply flags |
 | GET | `/api/search?q=…` | Search every message |
+| GET | `/api/email-test` | Sends one sample alert email and returns the sender address (one per minute) |
 | POST | `/api/sync` | What the apps poll: changes, presence, new messages |
 
 ## Local development
