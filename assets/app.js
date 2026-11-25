@@ -334,7 +334,7 @@
       const o = d.open;
       if (o && o.id === S.openId) {
         if (o.missing) {
-          if (S.loaded || S.msgs.length) toast(S.storage === 'memory' ? 'Not saved: connect storage in Vercel first' : 'That chat was deleted');
+          if (S.loaded || S.msgs.length) toast(S.storage === 'memory' ? 'Not saved: storage isn’t connected yet' : 'That chat was deleted');
           store.del(LS.last + '.' + S.role);
           startNew({ quiet: true });
         } else {
@@ -446,7 +446,7 @@
     const n = $('#storage-note');
     if (S.storage === 'memory') {
       n.hidden = false;
-      n.textContent = 'Storage isn’t connected yet, so chats can disappear. Add Upstash Redis to this project in Vercel to keep them for good.';
+      n.textContent = 'Storage isn’t connected yet, so chats can disappear. Connect Firebase or Upstash Redis in Vercel to keep them for good.';
     } else n.hidden = true;
   }
 
@@ -930,7 +930,7 @@
     }
     menu.innerHTML = items.map((it) => it === 'hr' ? '<hr>' :
       '<button role="menuitem" data-m="' + it[0] + '" class="' + (it[4] || '') + '">' + icon(it[1]) + '<span>' + esc(it[2]) + '</span>' + (it[3] ? '<span class="menu-meta">' + esc(it[3]) + '</span>' : '') + '</button>').join('') +
-      '<hr><button role="menuitem" disabled style="cursor:default;color:var(--ink-3);font-size:12px">Version ' + esc(CFG.version) + ' · ' + esc(S.storage === 'redis' ? 'saved in the cloud' : S.storage === 'file' ? 'saved locally' : 'not saved yet') + '</button>';
+      '<hr><button role="menuitem" disabled style="cursor:default;color:var(--ink-3);font-size:12px">Version ' + esc(CFG.version) + ' · ' + esc(S.storage === 'redis' || S.storage === 'firebase' ? 'saved in the cloud' : S.storage === 'file' ? 'saved locally' : 'not saved yet') + '</button>';
     menu.hidden = false;
     menuBtn.setAttribute('aria-expanded', 'true');
     const first = menu.querySelector('button:not([disabled])'); if (first) first.focus();

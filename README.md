@@ -34,7 +34,18 @@ All three use the same design and the same chats.
 
 ### 1. Connect storage (required, otherwise chats are not kept)
 
-In Vercel: **mido-instinct → Storage → Create Database → Upstash for Redis** (free plan) → connect it to the project for all environments → **Deployments → Redeploy**. The site picks up `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`) automatically. Until then the sidebar shows a note that storage isn't connected.
+Pick one:
+
+**Firebase Realtime Database**
+1. In the [Firebase console](https://console.firebase.google.com), create a project (Analytics can stay off).
+2. Go to **Build → Realtime Database → Create Database** and choose **Start in locked mode**. The site signs in as an admin from the server, so the rules can stay locked.
+3. Copy the database URL shown at the top, for example `https://your-project-default-rtdb.firebaseio.com`.
+4. Go to **Project settings (gear) → Service accounts → Generate new private key** to download a JSON file.
+5. In Vercel, add `FIREBASE_DATABASE_URL` (the URL) and `FIREBASE_SERVICE_ACCOUNT` (the whole JSON file contents) as Sensitive variables, then redeploy.
+
+**Upstash Redis:** in Vercel go to **Storage → Create Database → Upstash for Redis** (free), connect it to the project and redeploy. It provides `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`).
+
+When both are set, Firebase is used. Until either is set, the sidebar shows a note that storage isn't connected.
 
 ### 2. Environment variables on Vercel
 
