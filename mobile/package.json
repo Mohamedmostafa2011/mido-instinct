@@ -1,0 +1,22 @@
+{
+  "name": "instinct-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Instinct chat for Android (Capacitor)",
+  "scripts": {
+    "prepare-web": "node ../scripts/build-app-web.mjs www android",
+    "android:add": "cap add android",
+    "android:assets": "capacitor-assets generate --android --iconBackgroundColor \"#f3f1ed\" --iconBackgroundColorDark \"#161514\" --splashBackgroundColor \"#f3f1ed\" --splashBackgroundColorDark \"#161514\"",
+    "android:sync": "npm run prepare-web && cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.3",
+    "@capacitor/local-notifications": "^8.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.3"
+  }
+}

@@ -1,0 +1,8 @@
+desktop
+mobile
+scripts
+.github
+.data
+dev-server.mjs
+*.md
+!README.md

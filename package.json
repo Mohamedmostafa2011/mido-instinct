@@ -1,0 +1,12 @@
+{
+  "name": "mido-instinct",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A private chat line between Mido and Instinct. Web on Vercel, Windows installer and Android app.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "app:web": "node scripts/build-app-web.mjs"
+  }
+}

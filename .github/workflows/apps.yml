@@ -1,0 +1,156 @@
+name: Build apps
+
+# Builds the Windows installer (.exe) and the Android app (.apk) from the same
+# web UI, then publishes both on a GitHub release:
+#   https://github.com/<owner>/<repo>/releases/latest/download/Instinct-Setup.exe
+#   https://github.com/<owner>/<repo>/releases/latest/download/Instinct.apk
+#
+# No GitHub secrets are needed: scripts/provision.mjs trades this workflow's
+# GitHub OIDC token for the app key (APP_KEY) and the Android signing keystore
+# (ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD), which live as environment
+# variables on Vercel. The server only answers this repository's apps workflow.
+# Optional repository variable MIDO_API_BASE (defaults to https://mido-instinct.vercel.app).
+
+on:
+  push:
+    branches: [main, 'arena/**']
+    paths:
+      - index.html
+      - assets/**
+      - desktop/**
+      - mobile/**
+      - scripts/**
+      - package.json
+      - .github/workflows/apps.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: apps-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MIDO_API_BASE: ${{ vars.MIDO_API_BASE || 'https://mido-instinct.vercel.app' }}
+  MIDO_APP_KEY: ${{ secrets.MIDO_APP_KEY }}
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Load build settings
+        run: node scripts/provision.mjs
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+      - name: Build installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+      - name: Collect
+        shell: bash
+        run: cp desktop/dist/Instinct-Setup-*.exe Instinct-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Instinct-Setup.exe
+          if-no-files-found: error
+
+  android:
+    name: Android app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: Load build settings
+        run: node scripts/provision.mjs
+      - name: Install
+        working-directory: mobile
+        run: npm ci
+      - name: Generate Android project
+        working-directory: mobile
+        run: |
+          npm run prepare-web
+          npx cap add android
+          npm run android:assets
+          npx cap sync android
+      - name: Build signed APK
+        working-directory: mobile
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_FILE" ]; then
+            npx cap build android \
+              --keystorepath "$ANDROID_KEYSTORE_FILE" \
+              --keystorepass "$ANDROID_KEYSTORE_PASSWORD" \
+              --keystorealias instinct \
+              --keystorealiaspass "$ANDROID_KEYSTORE_PASSWORD" \
+              --signing-type apksigner \
+              --androidreleasetype APK
+            APK=$(ls android/app/build/outputs/apk/release/*-signed.apk 2>/dev/null || ls android/app/build/outputs/apk/release/*.apk | head -1)
+          else
+            echo "::warning::No Android keystore on Vercel, building a debug APK"
+            (cd android && ./gradlew assembleDebug --no-daemon)
+            APK=android/app/build/outputs/apk/debug/app-debug.apk
+          fi
+          cp "$APK" "$GITHUB_WORKSPACE/Instinct.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: Instinct.apk
+          if-no-files-found: error
+
+  # The apps carry the app key, so they are only published as a release while the
+  # repository is private. On a public repository they stay as workflow artifacts
+  # (Actions tab → this run → Artifacts), which only signed-in GitHub users can fetch.
+  release:
+    name: Publish release
+    needs: [windows, android]
+    if: github.event.repository.private
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: build-${{ github.run_number }}
+        run: |
+          gh release create "$TAG" Instinct-Setup.exe Instinct.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Instinct apps · build ${{ github.run_number }}" \
+            --notes "Windows installer and Android app built from ${GITHUB_SHA::7} on ${GITHUB_REF_NAME}. Both open straight into the chats without a passkey." \
+            --latest
+
+  public-note:
+    name: Downloads
+    needs: [windows, android]
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::warning::This repository is public, so the apps were not published as a release (they contain the app key). Download them from this run's Artifacts, or make the repository private to get release links."
+          {
+            echo "### Apps are ready"
+            echo "Download **windows** (Instinct-Setup.exe) and **android** (Instinct.apk) from the Artifacts section of this run."
+            echo "Make the repository private to have them published at releases/latest instead."
+          } >> "$GITHUB_STEP_SUMMARY"

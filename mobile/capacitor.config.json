@@ -1,0 +1,12 @@
+{
+  "appId": "com.mido.instinct",
+  "appName": "Instinct",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#f3f1ed"
+  },
+  "plugins": {
+    "SystemBars": { "insetsHandling": "css", "style": "DEFAULT" },
+    "LocalNotifications": { "iconColor": "#2a6544" }
+  }
+}

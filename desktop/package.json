@@ -1,0 +1,41 @@
+{
+  "name": "instinct-desktop",
+  "productName": "Instinct",
+  "version": "1.0.0",
+  "description": "Instinct chat for Windows",
+  "author": "Mido",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "prepare-web": "node ../scripts/build-app-web.mjs app windows",
+    "start": "npm run prepare-web && electron .",
+    "dist": "npm run prepare-web && electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "^45.5.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.mido.instinct",
+    "productName": "Instinct",
+    "copyright": "Mido",
+    "files": ["main.js", "preload.js", "app/**/*", "build/badge.png"],
+    "directories": { "output": "dist", "buildResources": "build" },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.png",
+      "artifactName": "Instinct-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Instinct",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}
