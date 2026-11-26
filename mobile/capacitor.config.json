@@ -7,6 +7,6 @@
   },
   "plugins": {
     "SystemBars": { "insetsHandling": "css", "style": "DEFAULT" },
-    "LocalNotifications": { "iconColor": "#2a6544" }
+    "LocalNotifications": { "smallIcon": "ic_stat_mido", "iconColor": "#2a6544" }
   }
 }

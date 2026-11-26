@@ -274,6 +274,7 @@
     if (!S.started) {
       S.started = true;
       setInterval(renderPresence, 15000);
+      setupPush();
     }
     sync();
   }
@@ -293,7 +294,8 @@
 
   function schedule() {
     clearTimeout(S.timer);
-    let ms = document.hidden ? 30000 : document.hasFocus() ? 3000 : 8000;
+    // Hidden: the Windows app in the tray still checks often so its notifications stay quick.
+    let ms = document.hidden ? (CFG.platform === 'windows' ? 15000 : 30000) : document.hasFocus() ? 3000 : 8000;
     if (!document.hidden && S.presence.online && S.presence.chat === S.openId) ms = Math.min(ms, 2000);
     if (S.failures) ms = Math.min(30000, 2000 * 2 ** Math.min(S.failures, 4));
     S.timer = setTimeout(sync, ms);
@@ -308,7 +310,7 @@
     const now = Date.now();
     const typing = isTyping();
     const body = { ver: S.ver, chat: S.openId, count: S.count, rev: S.rev };
-    if (now - S.lastHeartbeat > 20000) { body.heartbeat = true; body.typing = typing; }
+    if (!document.hidden && now - S.lastHeartbeat > 20000) { body.heartbeat = true; body.typing = typing; } // "here now" only while on screen
     if (typing !== S.typingSent || (typing && now - S.lastTypingAt > 4000)) body.typing = typing;
     const open = S.chatMap.get(S.openId);
     if (open && open.unread && pageActive()) body.read = S.openId;
@@ -370,6 +372,7 @@
       const p = prev.get(c.id);
       if (p && p.last && p.last.at >= last.at) continue;
       if (pageActive() && c.id === S.openId) continue;
+      if (push.on) continue; // the server's push notification covers it (see setupPush)
       notify(NAMES[last.from] + ' · ' + c.title, last.text, c.id);
     }
   }
@@ -382,7 +385,7 @@
     if (native && native.flash) native.flash();
     const cap = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
     if (cap) {
-      cap.schedule({ notifications: [{ id: Math.floor(Math.random() * 2e9), title, body: clip(body, 200), extra: { chatId } }] }).catch(() => {});
+      cap.schedule({ notifications: [{ id: Math.floor(Math.random() * 2e9), title, body: clip(body, 200), extra: { chatId }, channelId: 'messages', smallIcon: 'ic_stat_mido' }] }).catch(() => {});
       return;
     }
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -393,9 +396,53 @@
     }
   }
 
+  // Android app: real push notifications through Firebase, shown by Android even
+  // when the app is closed. Only in builds made with the Firebase config (CFG.push).
+  const capPush = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
+  const PUSH = !!(CFG.push && capPush);
+  const push = { on: false, listening: false, token: store.get('mido.pushToken', '') };
+  async function setupPush() {
+    if (!PUSH || !notificationsOn()) return;
+    try {
+      if (!push.listening) {
+        push.listening = true;
+        capPush.addListener('registration', async (t) => {
+          push.token = t.value; store.set('mido.pushToken', t.value);
+          try { await api('session', { method: 'POST', body: { pushToken: t.value, platform: 'android' } }); push.on = true; }
+          catch (err) { console.warn('push: could not register this phone', err.message); }
+        });
+        capPush.addListener('registrationError', (e) => console.warn('push: registration failed', e && e.error));
+        // Arrives here only while the app is on screen; Android shows it otherwise.
+        capPush.addListener('pushNotificationReceived', (n) => {
+          const d = n.data || {};
+          if (d.kind !== 'test') sync();
+          if (d.chatId && pageActive() && d.chatId === S.openId) return;
+          notify(n.title || 'Instinct', n.body || '', d.chatId || null);
+        });
+        capPush.addListener('pushNotificationActionPerformed', (a) => { const id = a && a.notification && a.notification.data && a.notification.data.chatId; if (id) openChat(id); });
+      }
+      await capPush.createChannel({ id: 'messages', name: 'Messages', description: 'New messages in your chats', importance: 5, visibility: 0, vibration: true, lights: true, lightColor: '#2a6544' }).catch(() => {});
+      let perm = await capPush.checkPermissions();
+      if (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale') perm = await capPush.requestPermissions();
+      if (perm.receive !== 'granted') { toast('Allow notifications for Instinct in Android settings to get them while the app is closed'); return; }
+      await capPush.register();
+    } catch (err) { console.warn('push: setup failed', err); }
+  }
+  async function stopPush() {
+    if (!PUSH) return;
+    push.on = false;
+    if (push.token) api('session', { method: 'POST', body: { pushToken: push.token, enabled: false } }).catch(() => {});
+    try { await capPush.unregister(); } catch { /* */ }
+  }
+  async function testPush() {
+    try { await api('session', { method: 'POST', body: { pushTest: true } }); toast('Close the app now. A test notification arrives in 8 seconds.'); }
+    catch (err) { toast(err.message); }
+  }
+
   async function toggleNotifications() {
-    if (notificationsOn()) { store.set(LS.notify, 'off'); toast('Notifications off'); return; }
+    if (notificationsOn()) { store.set(LS.notify, 'off'); stopPush(); toast('Notifications off'); return; }
     store.set(LS.notify, 'on');
+    if (PUSH) { await setupPush(); toast('Notifications on'); return; }
     const cap = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
     if (cap) { try { await cap.requestPermissions(); } catch { /* */ } }
     else if ('Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch { /* */ } }
@@ -572,8 +619,17 @@
       '<span class="chat-row-title">' + (c.pinned ? icon('i-pin') : '') + '<span dir="auto">' + esc(c.title) + '</span></span>' +
       '<span class="chat-row-time">' + (c.last ? fmtListTime(c.last.at) : '') + '</span>' +
       '<span class="chat-row-preview" dir="auto">' + esc(preview) + '</span>' + tag;
-    b.setAttribute('aria-label', c.title + (status ? ', ' + status : '') + (c.last ? ', last message ' + fmtListTime(c.last.at) : ''));
-    return b;
+    b.setAttribute('aria-label', (c.pinned ? 'Pinned, ' : '') + c.title + (status ? ', ' + status : '') + (c.last ? ', last message ' + fmtListTime(c.last.at) : ''));
+    const item = document.createElement('div');
+    item.className = 'chat-item';
+    item.dataset.id = c.id;
+    item.appendChild(b);
+    const more = document.createElement('button');
+    more.type = 'button'; more.className = 'row-more'; more.dataset.id = c.id;
+    more.setAttribute('aria-label', 'More for ' + c.title); more.setAttribute('aria-haspopup', 'menu'); more.title = 'Pin, rename or delete';
+    more.innerHTML = icon('i-more');
+    item.appendChild(more);
+    return item;
   }
 
   function renderList() {
@@ -1411,6 +1467,9 @@
   });
 
   $('#chat-list').addEventListener('click', (e) => {
+    const more = e.target.closest('.row-more');
+    if (more) { e.stopPropagation(); openRowMenu(more.dataset.id, more); return; }
+    if (Date.now() - rowMenuAt < 600) return; // the tap that ended a long press
     const row = e.target.closest('.chat-row');
     if (!row) return;
     const i = row.dataset.i;
@@ -1446,30 +1505,109 @@
   $('#new-chat').addEventListener('click', () => startNew());
   $('#back-btn').addEventListener('click', backToList);
 
-  $('#pin-btn').addEventListener('click', async () => {
-    const c = S.chatMap.get(S.openId); if (!c) return;
-    try { await api('chats', { method: 'PATCH', body: { id: c.id, pinned: !c.pinned } }); toast(c.pinned ? 'Unpinned' : 'Pinned'); S.ver = undefined; sync(); }
-    catch (err) { toast(err.message); }
-  });
-  $('#rename-btn').addEventListener('click', async () => {
-    const c = S.chatMap.get(S.openId); if (!c) return;
+  /* chat actions: from the thread header or a chat's menu in the list */
+  async function togglePin(c) {
+    if (!c) return;
+    const pinned = !c.pinned;
+    c.pinned = pinned; // show it right away
+    S.chats = S.chats.slice().sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
+    renderList(); renderHead();
+    try { await api('chats', { method: 'PATCH', body: { id: c.id, pinned } }); toast(pinned ? 'Pinned to the top' : 'Unpinned'); }
+    catch (err) { c.pinned = !pinned; renderList(); renderHead(); toast(err.message); }
+    S.ver = undefined; sync();
+  }
+  async function renameChat(c) {
+    if (!c) return;
     const title = await dialog({ title: 'Rename chat', input: c.title, ok: 'Save' });
     if (!title || title === c.title) return;
     try { await api('chats', { method: 'PATCH', body: { id: c.id, title } }); S.ver = undefined; sync(); }
     catch (err) { toast(err.message); }
-  });
-  $('#delete-btn').addEventListener('click', async () => {
-    const c = S.chatMap.get(S.openId); if (!c) return;
+  }
+  async function deleteChat(c) {
+    if (!c) return;
     const ok = await dialog({ title: 'Delete this chat?', text: '“' + c.title + '” and all its messages will be removed for both of you. This can’t be undone.', ok: 'Delete chat', danger: true });
     if (!ok) return;
     try {
       await api('chats', { method: 'DELETE', body: { id: c.id } });
       toast('Chat deleted');
-      startNew({ quiet: true });
-      if (narrow()) backToList();
+      if (c.id === S.openId) { startNew({ quiet: true }); if (narrow()) backToList(); }
       S.ver = undefined; sync();
     } catch (err) { toast(err.message); }
+  }
+  $('#pin-btn').addEventListener('click', () => togglePin(S.chatMap.get(S.openId)));
+  $('#rename-btn').addEventListener('click', () => renameChat(S.chatMap.get(S.openId)));
+  $('#delete-btn').addEventListener('click', () => deleteChat(S.chatMap.get(S.openId)));
+
+  /* a chat's menu in the list: the ⋯ button on hover, right-click, or a long press on touch */
+  const rowMenu = $('#row-menu');
+  let rowMenuAt = 0, rowMenuFor = null, rowMenuAnchor = null;
+  function openRowMenu(id, anchor, at) {
+    const c = S.chatMap.get(id); if (!c) return;
+    closeMenu();
+    rowMenuFor = id; rowMenuAnchor = anchor;
+    rowMenu.innerHTML =
+      '<button role="menuitem" data-r="pin">' + icon('i-pin') + '<span>' + (c.pinned ? 'Unpin' : 'Pin to the top') + '</span></button>' +
+      '<button role="menuitem" data-r="rename">' + icon('i-pencil') + '<span>Rename</span></button>' +
+      '<hr><button role="menuitem" data-r="delete" class="danger">' + icon('i-trash') + '<span>Delete chat</span></button>';
+    rowMenu.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    const w = rowMenu.offsetWidth, h = rowMenu.offsetHeight;
+    let x = at ? at.x : r.right - w, y = at ? at.y : r.bottom + 4;
+    x = Math.max(8, Math.min(x, innerWidth - w - 8));
+    if (y + h > innerHeight - 8) y = Math.max(8, (at ? at.y : r.top - 4) - h);
+    rowMenu.style.left = x + 'px'; rowMenu.style.top = y + 'px';
+    document.querySelectorAll('.chat-item.menu-open').forEach((x) => x.classList.remove('menu-open'));
+    anchor.closest('.chat-item')?.classList.add('menu-open');
+    anchor.setAttribute('aria-expanded', 'true');
+    rowMenu.querySelector('button').focus({ preventScroll: true });
+  }
+  function closeRowMenu() {
+    if (rowMenu.hidden) return;
+    rowMenu.hidden = true;
+    document.querySelectorAll('.chat-item.menu-open').forEach((x) => x.classList.remove('menu-open'));
+    if (rowMenuAnchor) rowMenuAnchor.setAttribute('aria-expanded', 'false');
+  }
+  rowMenu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-r]'); if (!b) return;
+    const c = S.chatMap.get(rowMenuFor);
+    closeRowMenu();
+    if (b.dataset.r === 'pin') togglePin(c);
+    if (b.dataset.r === 'rename') renameChat(c);
+    if (b.dataset.r === 'delete') deleteChat(c);
   });
+  rowMenu.addEventListener('keydown', (e) => {
+    const items = [...rowMenu.querySelectorAll('button')];
+    const k = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(k + 1) % items.length].focus(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); items[(k - 1 + items.length) % items.length].focus(); }
+    if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); closeRowMenu(); rowMenuAnchor && rowMenuAnchor.focus(); }
+  });
+  document.addEventListener('click', (e) => { if (!rowMenu.hidden && !rowMenu.contains(e.target)) closeRowMenu(); });
+  $('#chat-list').addEventListener('scroll', closeRowMenu, { passive: true });
+  window.addEventListener('resize', closeRowMenu);
+  // Right-click (and the long press Android turns into a context menu)
+  $('#chat-list').addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.chat-row'); if (!row || row.classList.contains('result-row')) return;
+    e.preventDefault();
+    rowMenuAt = Date.now();
+    openRowMenu(row.dataset.id, row, { x: e.clientX, y: e.clientY });
+  });
+  // Long press on touch screens that don't send contextmenu
+  let pressTimer = 0, pressStart = null;
+  $('#chat-list').addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    const row = e.target.closest('.chat-row'); if (!row || row.classList.contains('result-row')) return;
+    pressStart = { x: e.clientX, y: e.clientY };
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      if (!rowMenu.hidden) return;
+      rowMenuAt = Date.now();
+      if (navigator.vibrate) navigator.vibrate(12);
+      openRowMenu(row.dataset.id, row, pressStart);
+    }, 480);
+  });
+  const cancelPress = (e) => { if (!pressStart) return; if (e.type !== 'pointermove' || Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) { clearTimeout(pressTimer); pressStart = null; } };
+  ['pointerup', 'pointercancel', 'pointermove'].forEach((t) => $('#chat-list').addEventListener(t, cancelPress, { passive: true }));
 
   /* menu */
   const menu = $('#menu');
@@ -1478,6 +1616,7 @@
     const items = [];
     const hasNotify = ('Notification' in window) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications);
     if (hasNotify) items.push(['notify', 'i-bell', 'Notifications', notificationsOn() ? 'On' : 'Off']);
+    if (push.on && notificationsOn()) items.push(['pushtest', 'i-bell', 'Send a test notification', '']);
     if (!IS_APP) {
       items.push(['switch', 'i-swap', 'Switch to ' + NAMES[other()], '']);
       items.push(['link', 'i-link', 'Copy sign-in link', '']);
@@ -1502,6 +1641,7 @@
     closeMenu();
     const m = b.dataset.m;
     if (m === 'notify') toggleNotifications();
+    if (m === 'pushtest') testPush();
     if (m === 'switch') {
       S.as = other(); store.set(LS.as, S.as);
       S.ver = undefined; S.firstLoad = true; S.lastHeartbeat = 0;
@@ -1521,6 +1661,7 @@
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (narrow()) backToList(); $('#search').focus(); }
     if (e.key === 'Escape' && !menu.hidden) { closeMenu(); menuBtn.focus(); }
+    if (e.key === 'Escape' && !rowMenu.hidden) closeRowMenu();
   });
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); else saveDraft(); });
@@ -1541,7 +1682,8 @@
   const capNotif = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
   if (capNotif) {
     capNotif.addListener('localNotificationActionPerformed', (a) => { const id = a?.notification?.extra?.chatId; if (id) openChat(id); });
-    if (notificationsOn()) capNotif.requestPermissions().catch(() => {});
+    capNotif.createChannel && capNotif.createChannel({ id: 'messages', name: 'Messages', description: 'New messages in your chats', importance: 5, visibility: 0, vibration: true }).catch(() => {});
+    if (notificationsOn() && !PUSH) capNotif.requestPermissions().catch(() => {});
   }
   if (window.midoNative && window.midoNative.onOpenChat) window.midoNative.onOpenChat((id) => openChat(id));
 

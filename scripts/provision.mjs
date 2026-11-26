@@ -25,5 +25,23 @@ if (body.androidKeystore) {
   console.log('::add-mask::' + body.androidKeystorePassword);
   out.push('ANDROID_KEYSTORE_FILE=' + file, 'ANDROID_KEYSTORE_PASSWORD=' + body.androidKeystorePassword);
 }
+// Push notifications: the Firebase config of the Android app (google-services.json)
+const gs = String(body.googleServices || '').trim();
+if (gs) {
+  try {
+    const json = JSON.parse(gs.startsWith('{') ? gs : Buffer.from(gs, 'base64').toString('utf8'));
+    const pkg = 'com.mido.instinct';
+    const ok = (json.client || []).some((c) => c.client_info?.android_client_info?.package_name === pkg);
+    if (!ok) throw new Error('it has no Android app with the package name ' + pkg);
+    const file = (RUNNER_TEMP || '.') + '/google-services.json';
+    fs.writeFileSync(file, JSON.stringify(json));
+    out.push('GOOGLE_SERVICES_FILE=' + file, 'MIDO_PUSH=1');
+    console.log('Push notifications: on (Firebase project ' + (json.project_info?.project_id || '?') + ')');
+  } catch (err) {
+    console.log('::warning title=Push notifications off::GOOGLE_SERVICES_JSON on Vercel is not usable: ' + err.message);
+  }
+} else {
+  console.log('::notice title=Push notifications off::Add GOOGLE_SERVICES_JSON on Vercel to get notifications while the Android app is closed.');
+}
 fs.appendFileSync(GITHUB_ENV, out.join('\n') + '\n');
 console.log('Build settings loaded from ' + apiBase);

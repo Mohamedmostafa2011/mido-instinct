@@ -3,7 +3,7 @@
 // The workflow sends a GitHub OIDC token (no stored secret needed). We check its
 // signature against GitHub's public keys and that it was minted for this repository's
 // apps workflow on a push or manual run, then return the app key (and the Android
-// signing keystore if one is configured). Anything else gets 403.
+// signing keystore and Firebase app config for push notifications, if set). Anything else gets 403.
 import crypto from 'node:crypto';
 import { cors, send } from '../lib/http.js';
 
@@ -59,6 +59,8 @@ export default async function handler(req, res) {
       appKey,
       androidKeystore: process.env.ANDROID_KEYSTORE_B64 || '',
       androidKeystorePassword: process.env.ANDROID_KEYSTORE_PASSWORD || '',
+      // google-services.json of the Android app registered in Firebase (raw JSON or base64)
+      googleServices: process.env.GOOGLE_SERVICES_JSON || '',
     });
   } catch (err) {
     await new Promise((r) => setTimeout(r, 400));

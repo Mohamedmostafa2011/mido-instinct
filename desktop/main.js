@@ -1,5 +1,7 @@
 // Instinct for Windows. Loads the bundled chat UI; the built-in app key means no passkey.
-const { app, BrowserWindow, shell, ipcMain, Menu, nativeImage, session } = require('electron');
+// Closing the window keeps Instinct running in the system tray, so notifications keep
+// coming. It also starts with Windows (in the tray). Quit from the tray icon's menu.
+const { app, BrowserWindow, shell, ipcMain, Menu, nativeImage, session, Tray, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -7,7 +9,24 @@ app.setAppUserModelId('com.mido.instinct'); // Windows needs this for notificati
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 
 let win = null;
+let tray = null;
+let quitting = false;
+const startHidden = process.argv.includes('--hidden'); // started with Windows: stay in the tray
 const stateFile = () => path.join(app.getPath('userData'), 'window.json');
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+function readSettings() {
+  try { return { startAtLogin: true, trayHintShown: false, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }; }
+  catch { return { startAtLogin: true, trayHintShown: false }; }
+}
+function writeSettings(patch) {
+  const next = { ...readSettings(), ...patch };
+  try { fs.writeFileSync(settingsFile(), JSON.stringify(next)); } catch { /* */ }
+  return next;
+}
+function applyLoginItem(on) {
+  if (!app.isPackaged) return; // only the installed app registers itself
+  app.setLoginItemSettings({ openAtLogin: !!on, args: ['--hidden'] });
+}
 
 function readState() {
   try { return JSON.parse(fs.readFileSync(stateFile(), 'utf8')); } catch { return {}; }
@@ -19,7 +38,7 @@ function saveState() {
 }
 
 function show() {
-  if (!win) return;
+  if (!win) { createWindow(); win.once('ready-to-show', () => win.show()); return; }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
@@ -44,12 +63,13 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       spellcheck: true,
+      backgroundThrottling: false, // keep checking for messages while hidden in the tray
     },
   });
   if (st.maximized) win.maximize();
   Menu.setApplicationMenu(null);
   win.loadFile(path.join(__dirname, 'app', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => { if (!startHidden) win.show(); });
 
   // Links open in the default browser, never inside the app
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -75,8 +95,44 @@ function createWindow() {
   });
 
   win.on('focus', () => win.flashFrame(false));
-  win.on('close', saveState);
+  // The close button hides to the tray instead of quitting
+  win.on('close', (e) => {
+    saveState();
+    if (quitting) return;
+    e.preventDefault();
+    win.hide();
+    const st = readSettings();
+    if (!st.trayHintShown && Notification.isSupported()) {
+      writeSettings({ trayHintShown: true });
+      const n = new Notification({ title: 'Instinct is still running', body: 'You’ll keep getting notifications. To quit, right-click the Instinct icon in the taskbar tray.', silent: true });
+      n.on('click', show);
+      n.show();
+    }
+  });
   win.on('closed', () => { win = null; });
+}
+
+function createTray() {
+  const img = nativeImage.createFromPath(path.join(__dirname, 'app', 'assets', 'img', 'icon-192.png')).resize({ width: 32, height: 32, quality: 'best' });
+  tray = new Tray(img);
+  tray.setToolTip('Instinct');
+  tray.on('click', show);
+  tray.on('double-click', show);
+  updateTrayMenu();
+}
+function updateTrayMenu() {
+  if (!tray) return;
+  const st = readSettings();
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Instinct', click: show },
+    { type: 'separator' },
+    {
+      label: 'Start with Windows', type: 'checkbox', checked: !!st.startAtLogin, enabled: app.isPackaged,
+      click: (item) => { writeSettings({ startAtLogin: item.checked }); applyLoginItem(item.checked); },
+    },
+    { type: 'separator' },
+    { label: 'Quit Instinct', click: () => { quitting = true; app.quit(); } },
+  ]));
 }
 
 let badgeIcon = null;
@@ -88,6 +144,7 @@ ipcMain.on('mido:badge', (_e, n) => {
   if (process.platform === 'win32') {
     if (!badgeIcon) badgeIcon = nativeImage.createFromPath(path.join(__dirname, 'build', 'badge.png'));
     win.setOverlayIcon(n ? badgeIcon : null, n ? n + ' unread' : '');
+    if (tray) tray.setToolTip(n ? 'Instinct · ' + n + ' unread' : 'Instinct');
   } else {
     app.setBadgeCount(n);
   }
@@ -109,6 +166,12 @@ function setupSession() {
   });
 }
 
-app.whenReady().then(() => { setupSession(); createWindow(); });
-app.on('window-all-closed', () => app.quit());
+app.whenReady().then(() => {
+  setupSession();
+  createWindow();
+  createTray();
+  applyLoginItem(readSettings().startAtLogin); // on by default; turn off from the tray menu
+});
+app.on('before-quit', () => { quitting = true; });
+app.on('window-all-closed', () => { if (quitting) app.quit(); }); // otherwise keep running in the tray
 app.on('activate', () => { if (!win) createWindow(); });

@@ -61,6 +61,7 @@ When both are set, Firebase is used. Until either is set, the sidebar shows a no
 | `SITE_URL`, `NOTIFY_TIMEZONE` | Optional: base of the link in the email (default `https://miduinvesting.vercel.app`) and the time zone for its timestamp (default `Africa/Cairo`) |
 | `REPLY_API_KEY` | Secret for `POST /api/reply`, sent in the `x-api-key` header. Generate it yourself and keep it only here. Without it the endpoint rejects every request |
 | `NOTIFY_WEBHOOK_URL` | Optional. Every new message from Mido is POSTed here as JSON (Zapier, Make, n8n…), useful to ping Instinct |
+| `GOOGLE_SERVICES_JSON` | The Android app's `google-services.json` from Firebase (paste the file's contents, or base64). Turns on push notifications that arrive while the app is closed. See *Notifications when the app is closed* |
 
 ### 3. Building the apps
 
@@ -70,7 +71,22 @@ The apps are **never published**. They contain the app key, so they stay private
 
 Windows may show SmartScreen ("unknown publisher") the first time because the installer isn't code-signed: **More info → Run anyway**. On Android, allow installing from your browser or file manager when asked.
 
+### 4. Notifications when the app is closed
+
+**Android** gets real push notifications through Firebase Cloud Messaging. Android shows them even after the app is swiped away or the phone restarts. The server sends them with the same `FIREBASE_SERVICE_ACCOUNT` that stores the chats, so there's no extra server key. Every new message goes to the other side's phones. Tapping one opens that chat.
+
+1. In the [Firebase console](https://console.firebase.google.com), open the **same project** as `FIREBASE_SERVICE_ACCOUNT` → **Project settings → General → Add app → Android**. Package name: `com.mido.instinct`. Register, then download `google-services.json`. You can skip the other steps.
+2. Under **Project settings → Cloud Messaging**, check that **Firebase Cloud Messaging API (V1)** says *Enabled*.
+3. On Vercel, add `GOOGLE_SERVICES_JSON` with the contents of that file, then redeploy.
+4. Run **Actions → Build apps**, then install the new APK over the old one. On first launch, allow notifications. Use **⋯ → Send a test notification** and close the app to check that it works.
+
+Without `GOOGLE_SERVICES_JSON`, the APK still builds. It only notifies while it's running, as before.
+
+**Windows**: closing the window keeps Instinct running in the system tray (next to the clock), so notifications keep coming. It also starts with Windows, hidden in the tray. Click the tray icon to open it. Right-click the icon for **Start with Windows** (on by default) and **Quit Instinct**.
+
 ## API (for Instinct or scripts)
+
+Pin a chat: `PATCH /api/chats {id, pinned: true}` (in the app: hover a chat and click ⋯, right-click it, or long-press it on a phone).
 
 Send the passkey in the `X-Mido-Key` header (or `?key=` on GET). `X-Mido-As: instinct|mido` picks the sender on the web key; the default is `instinct`.
 

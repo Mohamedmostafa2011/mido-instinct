@@ -7,7 +7,8 @@ name: Build apps
 #
 # No GitHub secrets are needed: scripts/provision.mjs trades this workflow's
 # GitHub OIDC token for the app key (APP_KEY) and the Android signing keystore
-# (ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD), which live as environment
+# (ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD) and, for push notifications,
+# the Firebase app config (GOOGLE_SERVICES_JSON), which live as environment
 # variables on Vercel. The server only answers this repository's apps workflow.
 # Optional repository variable MIDO_API_BASE (defaults to https://mido-instinct.vercel.app).
 
@@ -93,6 +94,8 @@ jobs:
           npm run prepare-web
           npx cap add android
           node ../scripts/android-manifest.mjs android/app/src/main/AndroidManifest.xml
+          # Push notifications while the app is closed need the Firebase app config
+          if [ -n "$GOOGLE_SERVICES_FILE" ]; then cp "$GOOGLE_SERVICES_FILE" android/app/google-services.json; echo "Push notifications: on"; fi
           npm run android:assets
           npx cap sync android 2>&1 | tee "$RUNNER_TEMP/gen.log" || { echo "::error title=cap sync failed::$(tail -n 30 "$RUNNER_TEMP/gen.log" | sed ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
       - name: Build APK
